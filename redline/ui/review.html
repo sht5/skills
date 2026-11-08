@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Review · Redline</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  .layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: calc(100vh - 53px); }
+  .side { border-right: 1px solid var(--border); padding: 14px 12px; position: sticky; top: 53px; height: calc(100vh - 53px); overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+  .main { padding: 16px 20px 120px; min-width: 0; }
+  .summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; color: var(--muted); font-size: 13px; }
+  .summary .desc { min-width: 0; overflow-wrap: anywhere; }
+  .plus { color: var(--ok); font-weight: 600; }
+  .minus { color: var(--accent); font-weight: 600; }
+  .files { display: flex; flex-direction: column; gap: 1px; }
+  .fitem { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; min-width: 0; }
+  .fitem:hover { background: var(--surface-2); }
+  .fitem.viewed .fname { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--border); }
+  .fstat { font: 600 11px var(--mono); width: 14px; text-align: center; flex: none; }
+  .st-added { color: var(--ok); } .st-deleted { color: var(--accent); } .st-modified { color: #b7791f; } .st-renamed, .st-copied { color: #4a7bd8; }
+  .fname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; flex: 1; }
+  .fname bdi { direction: ltr; }
+  .fname .dir { color: var(--muted); }
+  .fcount { font: 11px var(--mono); color: var(--muted); flex: none; }
+  .fnotes { font-size: 11px; background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 0 5px; flex: none; }
+  .progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .progress > div { height: 100%; background: var(--ok); width: 0; transition: width .2s; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; overflow: clip; scroll-margin-top: 64px; }
+  .card-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); position: sticky; top: 53px; z-index: 5; cursor: pointer; }
+  .card.collapsed .card-head { border-bottom: 0; }
+  .card.collapsed .card-body { display: none; }
+  .chev { transition: transform .15s; color: var(--muted); width: 12px; flex: none; }
+  .card.collapsed .chev { transform: rotate(-90deg); }
+  .cpath { font: 600 13px var(--mono); min-width: 0; overflow-wrap: anywhere; }
+  .cpath .from { color: var(--muted); font-weight: 400; }
+  .card-head label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .card-body { overflow-x: auto; }
+  .notice { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+
+  table.diff { border-collapse: collapse; width: 100%; font: 12.5px/1.55 var(--mono); tab-size: 4; }
+  table.diff td { padding: 0 8px; vertical-align: top; }
+  td.num { width: 1%; min-width: 44px; text-align: right; color: var(--muted); user-select: none; cursor: pointer; position: relative; white-space: nowrap; }
+  td.num:hover { color: var(--text); }
+  td.num.can:hover::before { content: "+"; position: absolute; left: 2px; top: 0; width: 15px; height: 17px; line-height: 17px; text-align: center; background: var(--accent); color: var(--accent-ink); border-radius: 4px; font-weight: 700; }
+  td.code { white-space: pre-wrap; word-break: break-all; width: 49%; }
+  table.unified td.code { width: auto; }
+  td.code::before { content: attr(data-sign); color: var(--muted); display: inline-block; width: 1.2em; user-select: none; }
+  tr.add td.code, td.code.add { background: var(--add-bg); }
+  tr.add td.num, td.num.add { background: var(--add-num); }
+  tr.del td.code, td.code.del { background: var(--del-bg); }
+  tr.del td.num, td.num.del { background: var(--del-num); }
+  td.empty { background: var(--surface-2); }
+  tr.hunk td { background: var(--accent-soft); color: var(--muted); padding: 3px 10px; font-size: 12px; }
+  tr.sel td.code, tr.sel td.num, td.sel { box-shadow: inset 0 0 0 9999px var(--sel-bg); }
+  table.split td.code.sep { border-left: 1px solid var(--border); }
+
+  tr.thread > td { padding: 6px 10px 6px 60px; background: var(--bg); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-family: var(--sans); font-size: 14px; }
+  .cmt { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; max-width: 760px; margin: 4px 0; }
+  .cmt-head { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .cmt-body { white-space: pre-wrap; word-break: break-word; }
+  .cmt pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 6px 0 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; }
+  .cmt .sugg-label { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .form { background: var(--surface); border: 1px solid var(--accent); border-radius: 9px; padding: 10px; max-width: 760px; margin: 4px 0; }
+  .form .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .form textarea.sugg { font: 12.5px/1.5 var(--mono); margin-top: 8px; }
+  .form .label { font-size: 12px; color: var(--muted); }
+
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 13px; }
+  .seg button.on { background: var(--surface-2); font-weight: 600; }
+  .gen-list .cmt { margin: 0 0 8px; position: relative; padding-right: 30px; }
+  .gen-list .cmt .icon-btn { position: absolute; top: 6px; right: 6px; }
+  .filter { width: 100%; }
+  .loading { opacity: .5; pointer-events: none; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .side { position: static; height: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--border); }
+    .main { padding: 12px 8px 60px; }
+    tr.thread > td { padding-left: 10px; }
+    .card-head { top: 0; position: static; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span>Redline</div>
+  <div class="crumb" id="crumb">Code review</div>
+  <div class="spacer"></div>
+  <span id="gitctl" hidden style="display:flex;gap:6px;align-items:center">
+    <select class="input" id="difftype" title="What to compare"></select>
+    <input class="input hide-sm" id="base" placeholder="base ref" size="12" title="Compare against this ref (since-base only). Enter to apply.">
+  </span>
+  <div class="seg hide-sm" id="layoutseg"><button data-l="unified" class="on">Unified</button><button data-l="split">Split</button></div>
+  <button class="btn ghost small hide-sm" id="theme" title="Toggle light/dark theme" aria-label="Toggle theme"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
+  <button class="btn ghost" id="close">Close</button>
+  <button class="btn primary" id="send" title="Send comments to Claude">Send feedback <span class="count" id="n">0</span></button>
+  <button class="btn ok" id="approve" title="Approve: no changes requested">Approve</button>
+</header>
+<div class="layout">
+  <aside class="side">
+    <div>
+      <input class="input filter" id="filter" placeholder="Filter files…" aria-label="Filter files">
+      <div class="progress" title="Files marked viewed"><div id="prog"></div></div>
+      <div class="summary" style="margin:6px 0 0"><span id="viewedtxt"></span></div>
+    </div>
+    <div class="files" id="files"></div>
+    <div>
+      <h3 class="panel-title">General comments</h3>
+      <div class="gen-list" id="genlist"></div>
+      <textarea class="input" id="general" rows="3" placeholder="Feedback on the change as a whole… (⌘/Ctrl+Enter to add)"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="btn small" id="addgen">Add comment</button></div>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="summary" id="summary"></div>
+    <div id="cards"></div>
+  </main>
+</div>
+<script type="module" src="/static/review.js"></script>
+</body>
+</html>

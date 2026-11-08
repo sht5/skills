@@ -1,0 +1,6 @@
+{
+  "name": "redline",
+  "description": "Browser-based plan review (on ExitPlanMode) and code review (/redline-review) with line-level annotations that flow back to Claude.",
+  "version": "0.1.0",
+  "keywords": ["planning", "code-review", "hooks", "ExitPlanMode", "annotations"]
+}

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan Review · Redline</title>
+<link rel="stylesheet" href="/static/common.css">
+<style>
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: calc(100vh - 53px); }
+  .main { padding: 32px 40px 120px; min-width: 0; }
+  .doc { max-width: 780px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 36px 44px; }
+  .doc ::selection { background: var(--sel-bg); }
+  .side { border-left: 1px solid var(--border); background: var(--bg); padding: 18px 16px; position: sticky; top: 53px; height: calc(100vh - 53px); overflow: auto; }
+  .hint { font-size: 12px; color: var(--muted); margin: 0 0 16px; }
+  ::highlight(rl-ann) { background-color: var(--mark); }
+  ::highlight(rl-del) { background-color: var(--del-num); text-decoration: line-through; }
+  ::highlight(rl-active) { background-color: var(--mark-active); }
+  .selbar { position: absolute; z-index: 30; display: flex; gap: 2px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); }
+  .selbar .btn { border: 0; padding: 5px 9px; font-size: 13px; }
+  .composer { position: absolute; z-index: 31; width: 340px; background: var(--surface); border: 1px solid var(--border); border-radius: 11px; box-shadow: var(--shadow); padding: 12px; }
+  .composer .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .composer .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; align-items: center; }
+  .diffview { font: 13px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .diffview div { padding: 0 10px 0 28px; position: relative; border-radius: 3px; }
+  .diffview div::before { position: absolute; left: 10px; color: var(--muted); }
+  .diffview .add { background: var(--add-bg); }
+  .diffview .add::before { content: "+"; }
+  .diffview .del { background: var(--del-bg); text-decoration: line-through; text-decoration-color: rgba(127,127,127,0.5); }
+  .diffview .del::before { content: "−"; }
+  .diffview .gap { color: var(--muted); padding: 4px 28px; font-style: italic; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 13px; }
+  .seg button.on { background: var(--surface-2); font-weight: 600; }
+  .approve-wrap { display: flex; align-items: center; gap: 6px; }
+  .general { margin-top: 18px; }
+  .mode-select { max-width: 170px; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .side { position: static; height: auto; border-left: 0; border-top: 1px solid var(--border); }
+    .main { padding: 16px 16px 40px; }
+    .doc { padding: 22px 18px; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span>Redline</div>
+  <div class="crumb" id="crumb">Plan review</div>
+  <span class="pill" id="version" hidden></span>
+  <div class="seg" id="viewseg" hidden>
+    <button data-view="doc" class="on">Plan</button>
+    <button data-view="diff" id="diffbtn">Changes</button>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn ghost small hide-sm" id="theme" title="Toggle light/dark theme" aria-label="Toggle theme"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
+  <button class="btn ghost" id="close" title="Close without a decision; Claude Code shows its own prompt">Close</button>
+  <button class="btn primary" id="deny" title="Send your notes to Claude (Ctrl/⌘+Shift+Enter)">Request changes <span class="count" id="n">0</span></button>
+  <div class="approve-wrap">
+    <select class="input mode-select hide-sm" id="mode" title="Permission mode after approval">
+      <option value="keep">Keep current mode</option>
+      <option value="acceptEdits">Auto-accept edits</option>
+      <option value="default">Ask before edits</option>
+    </select>
+    <button class="btn ok" id="approve" title="Approve the plan (Ctrl/⌘+Enter)">Approve</button>
+  </div>
+</header>
+<div class="layout">
+  <main class="main"><article class="doc md" id="doc"></article></main>
+  <aside class="side">
+    <p class="hint">Select any text in the plan to comment on it, replace it, or mark it for removal.</p>
+    <h3 class="panel-title">Notes</h3>
+    <div id="notes"></div>
+    <div class="general">
+      <h3 class="panel-title">Overall feedback</h3>
+      <textarea class="input" id="general" rows="4" placeholder="Anything about the plan as a whole…"></textarea>
+    </div>
+  </aside>
+</div>
+<script type="module" src="/static/plan.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "redline",
+  "owner": { "name": "redline" },
+  "plugins": [
+    {
+      "name": "redline",
+      "source": "./",
+      "description": "Browser-based plan review and code review for Claude Code."
+    }
+  ]
+}

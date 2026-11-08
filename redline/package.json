@@ -1,0 +1,17 @@
+{
+  "name": "redline-review",
+  "version": "0.1.0",
+  "description": "Browser-based plan review and code review for Claude Code. Annotate plans and diffs, send structured feedback back to the agent.",
+  "type": "module",
+  "bin": {
+    "redline": "bin/redline.js"
+  },
+  "files": ["bin", "src", "ui", "skills", "hooks", ".claude-plugin", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=20000 test/*.test.js"
+  },
+  "license": "MIT"
+}
