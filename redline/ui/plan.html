@@ -6,11 +6,12 @@
 <title>Plan Review · Redline</title>
 <link rel="stylesheet" href="/static/common.css">
 <style>
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: calc(100vh - 53px); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: calc(100vh - 53px); }
   .main { padding: 32px 40px 120px; min-width: 0; }
   .doc { max-width: 780px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 36px 44px; }
   .doc ::selection { background: var(--sel-bg); }
-  .side { border-left: 1px solid var(--border); background: var(--bg); padding: 18px 16px; position: sticky; top: 53px; height: calc(100vh - 53px); overflow: auto; }
+  .side { border-left: 1px solid var(--border); background: var(--bg); padding: 10px 16px 16px; position: sticky; top: 53px; height: calc(100vh - 53px); overflow: auto; display: flex; flex-direction: column; }
+  .pane[data-pane="ask"]:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .hint { font-size: 12px; color: var(--muted); margin: 0 0 16px; }
   ::highlight(rl-ann) { background-color: var(--mark); }
   ::highlight(rl-del) { background-color: var(--del-num); text-decoration: line-through; }
@@ -36,6 +37,7 @@
   .mode-select { max-width: 170px; }
   @media (max-width: 900px) {
     .layout { grid-template-columns: 1fr; }
+    .pane[data-pane="ask"]:not([hidden]) { height: 70vh; }
     .side { position: static; height: auto; border-left: 0; border-top: 1px solid var(--border); }
     .main { padding: 16px 16px 40px; }
     .doc { padding: 22px 18px; }
@@ -67,13 +69,19 @@
 <div class="layout">
   <main class="main"><article class="doc md" id="doc"></article></main>
   <aside class="side">
-    <p class="hint">Select any text in the plan to comment on it, replace it, or mark it for removal.</p>
-    <h3 class="panel-title">Notes</h3>
-    <div id="notes"></div>
-    <div class="general">
-      <h3 class="panel-title">Overall feedback</h3>
-      <textarea class="input" id="general" rows="4" placeholder="Anything about the plan as a whole…"></textarea>
+    <div class="tabs" role="tablist">
+      <button class="on" data-tab="notes" role="tab">Notes <span class="count" id="n2">0</span></button>
+      <button data-tab="ask" role="tab"><span class="spark">✦</span> Ask AI</button>
     </div>
+    <section class="pane" data-pane="notes">
+      <p class="hint">Select any text in the plan to comment on it, replace it, mark it for removal, or ask Claude about it.</p>
+      <div id="notes"></div>
+      <div class="general">
+        <h3 class="panel-title">Overall feedback</h3>
+        <textarea class="input" id="general" rows="4" placeholder="Anything about the plan as a whole…"></textarea>
+      </div>
+    </section>
+    <section class="pane" data-pane="ask" hidden id="askpane"></section>
   </aside>
 </div>
 <script type="module" src="/static/plan.js"></script>

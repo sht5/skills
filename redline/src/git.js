@@ -9,7 +9,7 @@ const MAX_UNTRACKED_FILES = 500;
 const MAX_UNTRACKED_BYTES = 1024 * 1024;
 
 export const DIFF_TYPES = {
-  "since-base": "Everything a PR would show: merge-base with the base branch vs working tree (incl. untracked)",
+  "since-base": "Everything an MR would show: merge-base with the base branch vs working tree (incl. untracked)",
   uncommitted: "All uncommitted changes: HEAD vs working tree (incl. untracked)",
   staged: "Staged changes only",
   unstaged: "Unstaged changes (incl. untracked)",
@@ -133,62 +133,53 @@ export function workingTreeDiff(dir, { type = "since-base", base = null } = {}) 
   return { patch, describe, type, base: usedBase, root };
 }
 
-/** Parse a GitHub PR or GitLab MR URL. */
-export function parsePrUrl(s) {
+/**
+ * Parse a GitLab merge request URL (gitlab.com or self-hosted):
+ *   https://<host>/<group>[/<subgroup>...]/<project>/-/merge_requests/<iid>[/diffs...]
+ * @returns {{hostname:string, project:string, number:number, url:string, projectUrl:string}|null}
+ */
+export function parseMrUrl(s) {
   let u;
   try {
     u = new URL(s);
   } catch {
     return null;
   }
+  if (!/^https?:$/.test(u.protocol)) return null;
   const parts = u.pathname.split("/").filter(Boolean);
-  const gh = u.hostname === "github.com" || u.hostname.startsWith("github.");
-  if (gh && parts[2] === "pull" && /^\d+$/.test(parts[3] || "")) {
-    return { host: "github", hostname: u.hostname, owner: parts[0], repo: parts[1], number: Number(parts[3]), url: s };
-  }
-  const mrIdx = parts.indexOf("merge_requests");
-  if (mrIdx > 0 && parts[mrIdx - 1] === "-" && /^\d+$/.test(parts[mrIdx + 1] || "")) {
-    const project = parts.slice(0, mrIdx - 1).join("/");
-    return { host: "gitlab", hostname: u.hostname, project, number: Number(parts[mrIdx + 1]), url: s };
-  }
-  return null;
+  const i = parts.indexOf("merge_requests");
+  if (i < 2 || parts[i - 1] !== "-" || !/^\d+$/.test(parts[i + 1] || "")) return null;
+  const project = parts.slice(0, i - 1).join("/");
+  const number = Number(parts[i + 1]);
+  const projectUrl = `${u.protocol}//${u.host}/${project}`;
+  return { hostname: u.host, project, number, url: `${projectUrl}/-/merge_requests/${number}`, projectUrl };
 }
 
-/** Fetch a PR/MR diff with the platform CLI (gh or glab). */
-export function fetchPr(pr) {
-  if (pr.host === "github") {
-    const view = run("gh", ["pr", "view", pr.url, "--json", "number,title,url,headRefName,baseRefName"]);
-    if (!view.ok) throw new Error(`gh pr view failed (is gh installed and authenticated?): ${view.stderr.trim()}`);
-    const meta = JSON.parse(view.stdout);
-    const diff = run("gh", ["pr", "diff", pr.url, "--color=never"]);
-    if (!diff.ok) throw new Error(`gh pr diff failed: ${diff.stderr.trim()}`);
-    return {
-      patch: diff.stdout,
-      pr: {
-        repo: `${pr.owner}/${pr.repo}`,
-        number: meta.number,
-        title: meta.title,
-        url: meta.url,
-        head: meta.headRefName,
-        base: meta.baseRefName,
-      },
-    };
+/** Fetch an MR's metadata and diff with an authenticated `glab`. */
+export function fetchMr(mr) {
+  const glab = process.env.REDLINE_GLAB_BIN || "glab";
+  const view = run(glab, ["mr", "view", String(mr.number), "-R", mr.projectUrl, "-F", "json"]);
+  if (!view.ok) {
+    const hint = /ENOENT|not found/i.test(view.stderr) ? " (install glab: https://gitlab.com/gitlab-org/cli)" : " (is glab authenticated? try `glab auth login --hostname " + mr.hostname + "`)";
+    throw new Error(`glab mr view failed${hint}: ${view.stderr.trim()}`);
   }
-  const repoArg = `${pr.hostname}/${pr.project}`;
-  const view = run("glab", ["mr", "view", String(pr.number), "-R", repoArg, "-F", "json"]);
-  if (!view.ok) throw new Error(`glab mr view failed (is glab installed and authenticated?): ${view.stderr.trim()}`);
-  const meta = JSON.parse(view.stdout);
-  const diff = run("glab", ["mr", "diff", String(pr.number), "-R", repoArg, "--raw"]);
+  let meta;
+  try {
+    meta = JSON.parse(view.stdout);
+  } catch {
+    throw new Error(`glab mr view returned unexpected output: ${view.stdout.slice(0, 200)}`);
+  }
+  const diff = run(glab, ["mr", "diff", String(mr.number), "-R", mr.projectUrl, "--raw"]);
   if (!diff.ok) throw new Error(`glab mr diff failed: ${diff.stderr.trim()}`);
   return {
     patch: diff.stdout,
-    pr: {
-      repo: pr.project,
-      number: meta.iid ?? pr.number,
-      title: meta.title,
-      url: meta.web_url || pr.url,
-      head: meta.source_branch,
-      base: meta.target_branch,
+    mr: {
+      repo: mr.project,
+      number: meta.iid ?? mr.number,
+      title: meta.title || `MR !${mr.number}`,
+      url: meta.web_url || mr.url,
+      head: meta.source_branch || "?",
+      base: meta.target_branch || "?",
     },
   };
 }

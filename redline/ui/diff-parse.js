@@ -1,4 +1,4 @@
-// Parse a unified diff (git / gh / glab output) into files, hunks and lines.
+// Parse a unified diff (git / glab output) into files, hunks and lines.
 
 /**
  * @typedef {{type:'ctx'|'add'|'del', text:string, oldNo:number|null, newNo:number|null, noNewline?:boolean}} DiffLine

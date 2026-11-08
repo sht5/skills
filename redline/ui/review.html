@@ -7,6 +7,15 @@
 <link rel="stylesheet" href="/static/common.css">
 <style>
   .layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: calc(100vh - 53px); }
+  .layout.with-ask { grid-template-columns: 290px minmax(0, 1fr) 400px; }
+  .askside { border-left: 1px solid var(--border); padding: 12px 14px; position: sticky; top: 53px; height: calc(100vh - 53px); display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
+  .askside-head { display: flex; align-items: center; }
+  .askpane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .aibanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border); border-left: 3px solid #6b4fd8; border-radius: 8px; background: var(--surface); font-size: 13px; }
+  .aibanner .act { font: 12px var(--mono); color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .cmt.ai { border-color: #6b4fd8; }
+  .cmt details { margin-top: 6px; font-size: 13px; color: var(--muted); }
+  .cmt details summary { cursor: pointer; }
   .side { border-right: 1px solid var(--border); padding: 14px 12px; position: sticky; top: 53px; height: calc(100vh - 53px); overflow: auto; display: flex; flex-direction: column; gap: 14px; }
   .main { padding: 16px 20px 120px; min-width: 0; }
   .summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; color: var(--muted); font-size: 13px; }
@@ -75,8 +84,14 @@
   .filter { width: 100%; }
   .loading { opacity: .5; pointer-events: none; }
 
+  @media (max-width: 1200px) {
+    .layout.with-ask { grid-template-columns: minmax(0, 1fr) 380px; }
+    .layout.with-ask > .side { display: none; }
+  }
   @media (max-width: 900px) {
-    .layout { grid-template-columns: 1fr; }
+    .layout, .layout.with-ask { grid-template-columns: 1fr; }
+    .layout.with-ask > .side { display: flex; }
+    .askside { position: fixed; inset: 53px 0 0 0; height: auto; z-index: 40; }
     .side { position: static; height: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--border); }
     .main { padding: 12px 8px 60px; }
     tr.thread > td { padding-left: 10px; }
@@ -95,6 +110,8 @@
   </span>
   <div class="seg hide-sm" id="layoutseg"><button data-l="unified" class="on">Unified</button><button data-l="split">Split</button></div>
   <button class="btn ghost small hide-sm" id="theme" title="Toggle light/dark theme" aria-label="Toggle theme"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
+  <button class="btn" id="aireview" hidden title="Run a Claude review agent; its findings appear as comments you can edit or delete"><span class="spark">✦</span> AI review</button>
+  <button class="btn" id="asktoggle" hidden title="Ask Claude about this change"><span class="spark">✦</span> Ask AI</button>
   <button class="btn ghost" id="close">Close</button>
   <button class="btn primary" id="send" title="Send comments to Claude">Send feedback <span class="count" id="n">0</span></button>
   <button class="btn ok" id="approve" title="Approve: no changes requested">Approve</button>
@@ -115,9 +132,14 @@
     </div>
   </aside>
   <main class="main">
+    <div class="aibanner" id="aibanner" hidden></div>
     <div class="summary" id="summary"></div>
     <div id="cards"></div>
   </main>
+  <aside class="askside" id="askside" hidden>
+    <div class="askside-head"><h3 class="panel-title" style="margin:0"><span class="spark">✦</span> Ask AI</h3><span class="spacer"></span><button class="icon-btn" id="askclose" title="Hide">✕</button></div>
+    <div id="askpane" class="askpane"></div>
+  </aside>
 </div>
 <script type="module" src="/static/review.js"></script>
 </body>

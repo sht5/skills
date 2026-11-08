@@ -78,7 +78,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
-code, pre, table.diff, textarea.sugg, .diffview { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+code, pre, table.diff, table.diff td, textarea.sugg, .diffview { font-variant-ligatures: none !important; font-feature-settings: "liga" 0, "calt" 0 !important; }
 
 /* ---------- top bar ---------- */
 .topbar {
@@ -176,3 +176,46 @@ textarea.input { width: 100%; resize: vertical; min-height: 64px; display: block
   .topbar { flex-wrap: wrap; }
   .hide-sm { display: none !important; }
 }
+
+/* ---------- Ask AI ---------- */
+.ask { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
+.ask-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 13px; }
+.seg button.on { background: var(--surface-2); font-weight: 600; }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.seg.small button { padding: 3px 8px; font-size: 12px; }
+.small-input { padding: 2px 6px !important; font-size: 12px; }
+.ask-thread { flex: 1; min-height: 120px; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 2px; }
+.ask-hello { color: var(--muted); font-size: 13px; }
+.ask-msg { border-radius: 10px; padding: 8px 11px; font-size: 14px; overflow-wrap: anywhere; }
+.ask-msg.user { background: var(--accent-soft); align-self: flex-end; max-width: 92%; white-space: pre-wrap; }
+.ask-msg.ai { background: var(--surface); border: 1px solid var(--border); }
+.ask-msg.ai .md { font-size: 14px; line-height: 1.55; }
+.ask-msg.ai .md > :last-child { margin-bottom: 0; }
+.ask-msg.ai .md h1, .ask-msg.ai .md h2, .ask-msg.ai .md h3 { font-size: 1em; margin: .8em 0 .3em; border: 0; padding: 0; }
+.ask-quote { font-size: 12px; color: var(--muted); border-left: 2px solid var(--accent); padding-left: 6px; margin-bottom: 4px; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.ask-tools:empty { display: none; }
+.ask-tools { margin-bottom: 6px; }
+.ask-tool { font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask-tool span { opacity: .8; }
+.ask-caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.ask-error { margin-top: 6px; color: var(--accent); font-size: 13px; white-space: pre-wrap; }
+.ask-actions { display: flex; gap: 4px; margin-top: 6px; }
+.ask-compose { display: flex; flex-direction: column; gap: 6px; }
+.ask-chip { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); background: var(--surface-2); border-radius: 6px; padding: 3px 4px 3px 8px; }
+.ask-chip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-row { display: flex; align-items: center; gap: 6px; }
+.ask-status { font-size: 12px; color: var(--muted); }
+.ai-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 650; padding: 0 6px; border-radius: 8px; background: #6b4fd8; color: #fff; letter-spacing: .02em; }
+.ai-badge.nit { background: #8a8378; }
+.ai-badge.pre_existing { background: #b7791f; }
+.spark { color: #6b4fd8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .spark { color: #a996ff; } }
+:root[data-theme="dark"] .spark { color: #a996ff; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.tabs button { border: 0; background: none; padding: 6px 10px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 600; font-size: 13px; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+[hidden] { display: none !important; }

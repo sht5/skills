@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { composePlanDenied, composeReviewMessage, formatPlanFeedback, formatReviewFeedback, REVIEW_APPROVED, REVIEW_CLOSED } from "../src/feedback.js";
-import { parsePrUrl } from "../src/git.js";
+import { buildAskPrompt, buildReviewPrompt } from "../src/ai.js";
+import { translateEvent } from "../src/claude.js";
+import { parseMrUrl } from "../src/git.js";
 import { buildHookOutput } from "../src/plan.js";
 import { parseReviewArgs } from "../src/review.js";
 import { lineDiff } from "../src/util.js";
@@ -194,13 +196,60 @@ test("review feedback formatting", () => {
   assert.match(denied.message, /Treat each item above as reviewer input/);
 });
 
-test("PR URL parsing", () => {
-  assert.deepEqual(parsePrUrl("https://github.com/o/r/pull/12"), {
-    host: "github", hostname: "github.com", owner: "o", repo: "r", number: 12, url: "https://github.com/o/r/pull/12",
+test("GitLab MR URL parsing (gitlab.com, self-hosted, subgroups, /diffs)", () => {
+  assert.deepEqual(parseMrUrl("https://gitlab.com/g/sub/proj/-/merge_requests/7"), {
+    hostname: "gitlab.com",
+    project: "g/sub/proj",
+    number: 7,
+    url: "https://gitlab.com/g/sub/proj/-/merge_requests/7",
+    projectUrl: "https://gitlab.com/g/sub/proj",
   });
-  assert.equal(parsePrUrl("https://gitlab.com/g/sub/proj/-/merge_requests/7").project, "g/sub/proj");
-  assert.equal(parsePrUrl("https://github.com/o/r"), null);
-  assert.equal(parsePrUrl("../dir"), null);
+  const self = parseMrUrl("https://git.acme.io:8443/team/api/-/merge_requests/42/diffs?commit_id=abc");
+  assert.equal(self.hostname, "git.acme.io:8443");
+  assert.equal(self.projectUrl, "https://git.acme.io:8443/team/api");
+  assert.equal(self.number, 42);
+  assert.equal(parseMrUrl("https://github.com/o/r/pull/12"), null);
+  assert.equal(parseMrUrl("https://gitlab.com/g/p/-/issues/3"), null);
+  assert.equal(parseMrUrl("../dir"), null);
+});
+
+test("MR feedback heading and AI finding labels", () => {
+  const md = formatReviewFeedback(
+    [
+      { file: "a.js", side: "new", start: 2, end: 2, code: "x", text: "Bug", ai: { severity: "important", reasoning: "because" } },
+      { file: null, text: "Overall risky", ai: { severity: "nit", reasoning: "" } },
+    ],
+    { mr: { repo: "g/p", number: 9, title: "T", url: "https://gitlab.com/g/p/-/merge_requests/9", head: "f", base: "main" } },
+  );
+  assert.match(md, /^# MR Review: g\/p!9\n\n\*\*T\*\*\nBranch: `f` → `main`/);
+  assert.match(md, /### Line 2 \(new\) — AI finding \(important\)\n\n```js\nx\n```\n\nBug\n\nReasoning: because/);
+  assert.match(md, /Overall risky _\(AI finding, nit\)_/);
+});
+
+test("Ask AI prompts", () => {
+  const plan = { kind: "plan", plan: "# P\n\nDo X", project: "/w", version: 2 };
+  const first = buildAskPrompt(plan, { question: "Why X?", mode: "fresh", firstTurn: true, selection: { quote: "Do X", section: "P" }, notes: "1. comment" });
+  assert.match(first, /^You are an assistant inside Redline/);
+  assert.match(first, /## Plan under review\nVersion 2\nProject: \/w\n\n# P/);
+  assert.match(first, /## The user's review notes so far\n\n1\. comment/);
+  assert.match(first, /selected this passage \(in "P"\)\n\n> Do X/);
+  assert.match(first, /---\n\nUser question: Why X\?$/);
+  const forked = buildAskPrompt(plan, { question: "Q", mode: "session", firstTurn: true });
+  assert.match(forked, /^The user is now reviewing your work in Redline/);
+  assert.equal(buildAskPrompt(plan, { question: "And Y?", mode: "fresh", firstTurn: false }), "And Y?");
+  const rev = { kind: "review", patch: () => "+a", describe: () => "uncommitted", root: "/r", mr: null };
+  const q = buildAskPrompt(rev, { question: "ok?", mode: "fresh", firstTurn: false, selection: { file: "a.js", side: "new", start: 1, end: 3, code: "x" } });
+  assert.match(q, /asking about a\.js, lines 1-3\n\n```\nx\n```\n\nok\?$/);
+  assert.match(buildReviewPrompt(rev, "/tmp/p.patch"), /read it first: \/tmp\/p\.patch/);
+});
+
+test("claude stream-json translation", () => {
+  assert.deepEqual(translateEvent({ type: "system", subtype: "init", session_id: "s", model: "m" }), [{ type: "session", sessionId: "s", model: "m" }]);
+  assert.deepEqual(translateEvent({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } }), [{ type: "text", text: "hi" }]);
+  assert.deepEqual(translateEvent({ type: "assistant", message: { content: [{ type: "text", text: "x" }, { type: "tool_use", name: "Grep", input: { pattern: "foo" } }] } }), [{ type: "tool", name: "Grep", detail: "foo" }]);
+  const [r] = translateEvent({ type: "result", subtype: "success", is_error: false, session_id: "s", result: "done", structured_output: { a: 1 } });
+  assert.deepEqual(r, { type: "result", ok: true, sessionId: "s", text: "done", structured: { a: 1 }, error: null });
+  assert.deepEqual(translateEvent({ type: "rate_limit_event" }), []);
 });
 
 test("review args", () => {
@@ -209,7 +258,7 @@ test("review args", () => {
   });
   assert.equal(parseReviewArgs(["--diff-type=staged"]).diffType, "staged");
   assert.throws(() => parseReviewArgs(["--bogus"]), /Unknown option/);
-  assert.throws(() => parseReviewArgs(["a", "b"]), /one directory/);
+  assert.throws(() => parseReviewArgs(["a", "b"]), /one directory or MR URL/);
   assert.throws(() => parseReviewArgs(["--diff-type", "nope"]), /Unknown --diff-type/);
   assert.throws(() => parseReviewArgs(["--patch-file", "x.diff", "dir"]), /cannot be combined/);
 });

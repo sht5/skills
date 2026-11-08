@@ -1,4 +1,5 @@
 import { $, $$, api, ask, decide, draftSaver, escapeHtml, h, setupTheme, toast, uid, watchClose } from "./common.js";
+import { createAskPanel } from "./ask.js";
 import { parseDiff, splitRows } from "./diff-parse.js";
 
 const BIG_FILE_LINES = 1500;
@@ -12,6 +13,7 @@ let payload;
 let files = [];
 let selection = null; // {file, side, start, end}
 const saveDraft = draftSaver();
+let askPanel;
 
 init().catch((e) => {
   $("#cards").innerHTML = `<div class="notice">Failed to load: ${escapeHtml(e.message)}</div>`;
@@ -55,7 +57,8 @@ async function init() {
   $("#approve").onclick = approve;
   $("#close").onclick = closeSession;
   $("#cards").addEventListener("click", onCardsClick);
-  loadPatch(payload.patch, payload.describe || payload.pr?.url || "");
+  setupAI();
+  loadPatch(payload.patch, payload.describe || payload.mr?.url || "");
 }
 
 function setupGitControls() {
@@ -346,6 +349,7 @@ function openForm(card, f, target, existing) {
     <textarea class="input sugg" rows="3" hidden spellcheck="false"></textarea>
     <div class="row">
       ${canSuggest ? `<button class="btn small" data-f="sugg">± Suggest change</button>` : ""}
+      ${payload.ai?.available ? `<button class="btn small" data-f="ask"><span class="spark">✦</span> Ask AI</button>` : ""}
       <span class="spacer"></span>
       <button class="btn small ghost" data-f="cancel">Cancel</button>
       <button class="btn small primary" data-f="save">${existing ? "Update" : "Comment"}</button>
@@ -383,7 +387,10 @@ function openForm(card, f, target, existing) {
       paintSelection();
       closeForms();
     } else if (a === "save") save();
-    else if (a === "sugg") {
+    else if (a === "ask") {
+      toggleAsk(true);
+      askPanel.askAbout({ file: f.path, side: target.side, start: target.start, end: target.end, code });
+    } else if (a === "sugg") {
       sugg.hidden = !sugg.hidden;
       if (!sugg.hidden && !sugg.value) sugg.value = code;
       if (!sugg.hidden) sugg.focus();
@@ -406,12 +413,14 @@ function openForm(card, f, target, existing) {
 
 function commentHtml(a) {
   const where = a.start == null ? "File comment" : a.start === a.end ? `Line ${a.start}` : `Lines ${a.start}–${a.end}`;
-  return `<div class="cmt"><div class="cmt-head"><b>${where}</b>${a.side === "old" ? "<span>(removed code)</span>" : ""}
+  const badge = a.ai ? `<span class="ai-badge ${a.ai.severity}">✦ AI · ${String(a.ai.severity).replace("_", "-")}</span>` : "";
+  return `<div class="cmt${a.ai ? " ai" : ""}"><div class="cmt-head"><b>${where}</b>${badge}${a.side === "old" ? "<span>(removed code)</span>" : ""}
     <span class="spacer"></span>
     <button class="icon-btn" data-cmt="edit" data-id="${a.id}">Edit</button>
     <button class="icon-btn" data-cmt="del" data-id="${a.id}" title="Delete">✕</button></div>
     ${a.text ? `<div class="cmt-body">${escapeHtml(a.text)}</div>` : ""}
-    ${a.suggestion != null && a.suggestion !== a.code ? `<div class="sugg-label">Suggested change</div><pre>${escapeHtml(a.suggestion)}</pre>` : ""}</div>`;
+    ${a.suggestion != null && a.suggestion !== a.code ? `<div class="sugg-label">Suggested change</div><pre>${escapeHtml(a.suggestion)}</pre>` : ""}
+    ${a.ai?.reasoning ? `<details><summary>Why Claude flagged this</summary><div class="cmt-body">${escapeHtml(a.ai.reasoning)}</div></details>` : ""}</div>`;
 }
 
 function renderThreads(card, f) {
@@ -447,6 +456,130 @@ function rerenderCard(card, f) {
   paintSelection();
 }
 
+/* ---------- Ask AI + AI review ---------- */
+
+function setupAI() {
+  const ai = payload.ai || { available: false, reason: "Ask AI is unavailable." };
+  askPanel = createAskPanel({
+    root: $("#askpane"),
+    ai,
+    getNotes: () =>
+      state.annotations
+        .map((a) => `- ${a.file ? `${a.file}${a.start != null ? `:${a.start}-${a.end}` : ""}` : "general"}: ${a.text}`)
+        .join("\n"),
+    describeSelection: (sel) =>
+      sel.start == null ? sel.file : `${sel.file}:${sel.start}${sel.end !== sel.start ? `-${sel.end}` : ""}${sel.side === "old" ? " (old)" : ""}`,
+    onAddNote: (sel, text) => {
+      if (sel?.file) state.annotations.push({ id: uid(), file: sel.file, side: sel.side, start: sel.start, end: sel.end, code: sel.code, text });
+      else state.annotations.push({ id: uid(), file: null, text });
+      rerenderAll();
+      persist();
+      toast("Added as a comment");
+    },
+  });
+  if (!ai.available) return;
+  $("#asktoggle").hidden = false;
+  $("#asktoggle").onclick = () => toggleAsk();
+  $("#askclose").onclick = () => toggleAsk(false);
+  if (ai.canReview) {
+    $("#aireview").hidden = false;
+    $("#aireview").onclick = startAIReview;
+  }
+}
+
+function toggleAsk(open) {
+  const side = $("#askside");
+  const show = open ?? side.hidden;
+  side.hidden = !show;
+  $(".layout").classList.toggle("with-ask", show);
+  if (show) askPanel.focus();
+}
+
+let aiJob = null;
+
+async function startAIReview() {
+  if (aiJob) return;
+  const banner = $("#aibanner");
+  banner.hidden = false;
+  banner.innerHTML = `<span class="spark">✦</span> <b>AI review running</b> <span class="act">Starting Claude…</span> <span class="el"></span> <button class="btn small" data-a="cancel">Cancel</button>`;
+  $("#aireview").disabled = true;
+  try {
+    const { id } = await api("/api/ai-review", {});
+    aiJob = id;
+  } catch (e) {
+    banner.innerHTML = `<span class="spark">✦</span> AI review failed to start: ${escapeHtml(e.message)}`;
+    $("#aireview").disabled = false;
+    return;
+  }
+  banner.querySelector("[data-a=cancel]").onclick = async () => {
+    await api("/api/ai-review-cancel", { id: aiJob }).catch(() => {});
+  };
+  const poll = async () => {
+    let job;
+    try {
+      job = await api(`/api/ai-review-status?id=${encodeURIComponent(aiJob)}`);
+    } catch (e) {
+      job = { status: "error", error: e.message };
+    }
+    if (job.status === "running") {
+      banner.querySelector(".act").textContent = job.activity.at(-1) || "Reading the change…";
+      banner.querySelector(".el").textContent = `${job.elapsed}s`;
+      return setTimeout(poll, 1500);
+    }
+    aiJob = null;
+    $("#aireview").disabled = false;
+    if (job.status === "done") {
+      const added = addFindings(job.findings);
+      const imp = job.findings.filter((f) => f.severity === "important").length;
+      banner.innerHTML = `<span class="spark">✦</span> <b>AI review: ${added} finding${added === 1 ? "" : "s"}${imp ? ` (${imp} important)` : ""}.</b> <span>${escapeHtml(job.summary || "")}</span>
+        <span class="spacer"></span><button class="icon-btn" data-a="x">✕</button>`;
+      banner.querySelector("[data-a=x]").onclick = () => (banner.hidden = true);
+      if (added) toast("Findings were added as comments: edit or delete any before sending");
+    } else if (job.status === "cancelled") {
+      banner.hidden = true;
+    } else {
+      banner.innerHTML = `<span class="spark">✦</span> AI review failed: ${escapeHtml(job.error || "unknown error")} <span class="spacer"></span><button class="icon-btn" data-a="x">✕</button>`;
+      banner.querySelector("[data-a=x]").onclick = () => (banner.hidden = true);
+    }
+  };
+  setTimeout(poll, 1000);
+}
+
+/** Map a finding's path onto a file in the diff (agents sometimes add or drop a prefix). */
+function matchFile(p) {
+  if (!p) return null;
+  const clean = p.replace(/^\.?\/+/, "").replace(/^[ab]\//, "");
+  return files.find((f) => f.path === clean) || files.find((f) => f.path.endsWith("/" + clean) || clean.endsWith("/" + f.path)) || null;
+}
+
+function addFindings(findings) {
+  let n = 0;
+  for (const f of findings || []) {
+    const file = matchFile(f.file);
+    const ai = { severity: f.severity, reasoning: f.reasoning };
+    if (!file) {
+      const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}: ` : "";
+      state.annotations.push({ id: uid(), file: null, text: where + f.description, ai });
+    } else if (f.line == null) {
+      state.annotations.push({ id: uid(), file: file.path, side: null, start: null, end: null, code: "", text: f.description, ai });
+    } else {
+      const start = f.line;
+      const end = Math.max(start, f.end_line ?? start);
+      state.annotations.push({ id: uid(), file: file.path, side: "new", start, end, code: codeFor(file, "new", start, end), text: f.description, ai });
+    }
+    n++;
+  }
+  rerenderAll();
+  persist();
+  return n;
+}
+
+function rerenderAll() {
+  renderCards();
+  renderFileList();
+  refreshCounts();
+}
+
 /* ---------- general comments ---------- */
 
 function addGeneral() {
@@ -463,6 +596,7 @@ function renderGeneral() {
   for (const a of state.annotations.filter((x) => !x.file)) {
     const el = h(`<div class="cmt"><button class="icon-btn" title="Delete">✕</button><div class="cmt-body"></div></div>`);
     el.querySelector(".cmt-body").textContent = a.text;
+    if (a.ai) el.prepend(h(`<span class="ai-badge ${a.ai.severity}" style="margin-bottom:4px">✦ AI · ${a.ai.severity.replace("_", "-")}</span>`));
     el.querySelector("button").onclick = () => {
       state.annotations = state.annotations.filter((x) => x !== a);
       persist();

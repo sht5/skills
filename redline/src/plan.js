@@ -9,6 +9,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { attachAI } from "./ai.js";
+import { CHILD_ENV } from "./claude.js";
 import { composePlanDenied } from "./feedback.js";
 import { startSession } from "./session.js";
 import { dataDir, ensureDir, hash, lineDiff, projectSlug, readStdin, writeFileAtomic } from "./util.js";
@@ -75,6 +77,8 @@ export function buildHookOutput(result, toolInput, plan) {
 
 export async function planHook() {
   const raw = await readStdin();
+  // Inside an Ask AI / review-agent child of ours: never open another review.
+  if (process.env[CHILD_ENV] === "1") process.exit(0);
   let event = {};
   try {
     event = raw.trim() ? JSON.parse(raw) : {};
@@ -103,10 +107,24 @@ export async function planHook() {
   const prevVersion = previous !== plan ? lastV : versions.at(-2);
   const prevText = prevVersion ? fs.readFileSync(path.join(dir, `v${prevVersion}.md`), "utf8") : null;
 
+  const api = {};
+  const ai = attachAI(api, {
+    kind: "plan",
+    plan,
+    project: cwd,
+    version,
+    cwd,
+    sessionId: event.session_id || null,
+    sessionCwd: cwd,
+  });
+
   const session = await startSession({
     page: "plan",
     draftKey: `plan-${hash(plan)}`,
+    api,
+    onFinish: ai.cleanup,
     payload: {
+      ai: ai.info,
       kind: "plan",
       title: planTitle(plan),
       plan,

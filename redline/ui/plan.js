@@ -1,4 +1,5 @@
 import { $, $$, api, ask, decide, draftSaver, escapeHtml, h, setupTheme, toast, uid, watchClose } from "./common.js";
+import { createAskPanel } from "./ask.js";
 import { renderMarkdown } from "./markdown.js";
 
 const KINDS = {
@@ -14,6 +15,7 @@ let payload;
 const saveDraft = draftSaver();
 const doc = $("#doc");
 const hasHighlights = typeof CSS !== "undefined" && "highlights" in CSS;
+let askPanel;
 
 init().catch((e) => {
   doc.innerHTML = `<p>Failed to load: ${escapeHtml(e.message)}</p>`;
@@ -46,6 +48,26 @@ async function init() {
   };
 
   doc.innerHTML = renderMarkdown(payload.plan);
+  $$(".tabs button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+  askPanel = createAskPanel({
+    root: $("#askpane"),
+    ai: payload.ai || { available: false, reason: "Ask AI is unavailable." },
+    getNotes: notesSummary,
+    describeSelection: (sel) => `“${sel.quote.replace(/\s+/g, " ").slice(0, 90)}${sel.quote.length > 90 ? "…" : ""}”`,
+    onAddNote: (sel, text) => {
+      if (sel) {
+        const a = { id: uid(), type: "comment", quote: sel.quote, text, line: sel.line, section: sel.section };
+        state.annotations.push(a);
+        const r = findRange(a.quote, a.line);
+        if (r) ranges.set(a.id, r);
+      } else {
+        state.general = (state.general ? state.general + "\n\n" : "") + text;
+        $("#general").value = state.general;
+      }
+      refresh();
+      toast(sel ? "Added as a note" : "Added to overall feedback");
+    },
+  });
   if (payload.draft) {
     state.general = payload.draft.general || "";
     for (const a of payload.draft.annotations || []) {
@@ -72,6 +94,19 @@ async function init() {
   $("#deny").onclick = requestChanges;
   $("#close").onclick = closeSession;
   refresh();
+}
+
+function showTab(t) {
+  $$(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  $$(".pane").forEach((p) => (p.hidden = p.dataset.pane !== t));
+  if (t === "ask") askPanel?.focus();
+}
+
+/** The reviewer's notes so far, as context for Ask AI. */
+function notesSummary() {
+  const lines = state.annotations.map((a, i) => `${i + 1}. ${a.type} on "${a.quote.slice(0, 200)}"${a.text ? `: ${a.text}` : ""}`);
+  if (state.general.trim()) lines.unshift(`Overall: ${state.general.trim()}`);
+  return lines.join("\n");
 }
 
 function setView(v) {
@@ -167,11 +202,18 @@ function showSelbar(range) {
     <button class="btn" data-k="comment">💬 Comment</button>
     <button class="btn" data-k="replace">✎ Replace</button>
     <button class="btn" data-k="delete">⌫ Remove</button>
-    <button class="btn" data-k="insert">＋ Add after</button></div>`);
+    <button class="btn" data-k="insert">＋ Add after</button>
+    ${payload.ai?.available ? `<button class="btn" data-k="ask"><span class="spark">✦</span> Ask AI</button>` : ""}</div>`);
   bar.addEventListener("mousedown", (e) => e.preventDefault()); // keep the selection
   bar.addEventListener("click", (e) => {
     const k = e.target.closest("button")?.dataset.k;
-    if (k) openComposer(k);
+    if (k === "ask") {
+      const sel = { quote: pending.quote, section: pending.section, line: pending.line };
+      closePopups();
+      getSelection()?.removeAllRanges();
+      showTab("ask");
+      askPanel.askAbout(sel);
+    } else if (k) openComposer(k);
   });
   placeNear(bar, range.getBoundingClientRect(), false);
 }
@@ -337,6 +379,7 @@ function refresh() {
   });
   const n = state.annotations.length + (state.general.trim() ? 1 : 0);
   $("#n").textContent = n;
+  $("#n2").textContent = n;
   paint();
   saveDraft({ annotations: state.annotations, general: state.general });
 }

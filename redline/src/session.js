@@ -14,6 +14,9 @@ const MIME = {
   ".svg": "image/svg+xml",
 };
 
+/** Returned by an API handler that wrote its own (streaming) response. */
+export const STREAMED = Symbol("streamed");
+
 /** How long a closed tab may stay closed before we treat it as "dismissed". */
 const CLOSE_GRACE_MS = Number(process.env.REDLINE_CLOSE_GRACE_MS || 5000);
 
@@ -61,10 +64,12 @@ function draftFile(key) {
  * @param {"plan"|"review"} opts.page
  * @param {object} opts.payload          data the UI renders
  * @param {string} [opts.draftKey]       key for persisting in-progress annotations
- * @param {Record<string,(body:any, query:URLSearchParams)=>any>} [opts.api]  extra endpoints under /api/
+ * @param {Record<string,(body:any, query:URLSearchParams, http:{req:any,res:any})=>any>} [opts.api]
+ *        extra endpoints under /api/; a handler may stream its own response and return STREAMED
+ * @param {() => void} [opts.onFinish]  called once a decision is in (stop background work)
  * @returns {Promise<{url:string, result:Promise<any>, close:()=>void}>}
  */
-export async function startSession({ page, payload, draftKey, api = {} }) {
+export async function startSession({ page, payload, draftKey, api = {}, onFinish }) {
   let settle;
   const result = new Promise((r) => (settle = r));
   let decided = false;
@@ -139,8 +144,9 @@ export async function startSession({ page, payload, draftKey, api = {} }) {
       const name = p.startsWith("/api/") ? p.slice(5) : null;
       if (name && api[name]) {
         const body = req.method === "POST" ? await readBody(req) : {};
-        const out = await api[name](body, url.searchParams);
-        return sendJSON(res, 200, out ?? {});
+        const out = await api[name](body, url.searchParams, { req, res });
+        if (out === STREAMED) return;
+        return sendJSON(res, out?.error ? 400 : 200, out ?? {});
       }
       sendJSON(res, 404, { error: "not found" });
     } catch (e) {
@@ -166,6 +172,9 @@ export async function startSession({ page, payload, draftKey, api = {} }) {
   );
 
   const close = () => {
+    try {
+      onFinish?.();
+    } catch {}
     try {
       fs.rmSync(sessFile, { force: true });
     } catch {}

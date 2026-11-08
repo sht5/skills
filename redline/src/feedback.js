@@ -91,13 +91,13 @@ function langFor(file) {
 
 /**
  * @param {Array<{file?:string|null, side?:string, start?:number, end?:number, code?:string, text:string, suggestion?:string}>} annotations
- * @param {{describe?:string, pr?:{title:string,url:string,number:number,head:string,base:string,repo:string}}} ctx
+ * @param {{describe?:string, mr?:{title:string,url:string,number:number,head:string,base:string,repo:string}}} ctx
  */
 export function formatReviewFeedback(annotations = [], ctx = {}) {
   const out = [];
-  if (ctx.pr) {
-    out.push(`# PR Review: ${ctx.pr.repo}#${ctx.pr.number}`, "", `**${ctx.pr.title}**`);
-    out.push(`Branch: \`${ctx.pr.head}\` → \`${ctx.pr.base}\``, ctx.pr.url, "");
+  if (ctx.mr) {
+    out.push(`# MR Review: ${ctx.mr.repo}!${ctx.mr.number}`, "", `**${ctx.mr.title}**`);
+    out.push(`Branch: \`${ctx.mr.head}\` → \`${ctx.mr.base}\``, ctx.mr.url, "");
   } else {
     out.push("# Code Review Feedback", "");
     if (ctx.describe) out.push(`**Diff:** ${ctx.describe}`, "");
@@ -106,7 +106,10 @@ export function formatReviewFeedback(annotations = [], ctx = {}) {
   const placed = annotations.filter((a) => a.file);
   if (general.length) {
     out.push("## General", "");
-    for (const g of general) out.push(g.text.trim(), "");
+    for (const g of general) {
+      out.push(g.ai ? `${g.text.trim()} _(AI finding, ${g.ai.severity})_` : g.text.trim(), "");
+      if (g.ai?.reasoning?.trim()) out.push(`Reasoning: ${g.ai.reasoning.trim()}`, "");
+    }
   }
   const byFile = new Map();
   for (const a of placed) {
@@ -117,13 +120,15 @@ export function formatReviewFeedback(annotations = [], ctx = {}) {
     out.push(`## ${file}`, "");
     list.sort((x, y) => (x.start ?? 0) - (y.start ?? 0));
     for (const a of list) {
+      const tag = a.ai ? ` — AI finding (${String(a.ai.severity || "finding").replace("_", "-")})` : "";
       if (a.start == null) {
-        out.push("### File comment", "");
+        out.push(`### File comment${tag}`, "");
       } else {
-        out.push(`### ${lineLabel(a)}`, "");
+        out.push(`### ${lineLabel(a)}${tag}`, "");
         if (a.code) out.push(fence(a.code, langFor(file)), "");
       }
       if (a.text?.trim()) out.push(a.text.trim(), "");
+      if (a.ai?.reasoning?.trim()) out.push(`Reasoning: ${a.ai.reasoning.trim()}`, "");
       if (a.suggestion != null && a.suggestion !== a.code) {
         out.push("Suggested change:", "", fence(a.suggestion, langFor(file)), "");
       }

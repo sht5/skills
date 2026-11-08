@@ -1,7 +1,7 @@
 {
   "name": "redline-review",
   "version": "0.1.0",
-  "description": "Browser-based plan review and code review for Claude Code. Annotate plans and diffs, send structured feedback back to the agent.",
+  "description": "Browser-based plan review and code review (local changes and GitLab MRs) for Claude Code, with Ask AI. Annotate plans and diffs, send structured feedback back to Claude.",
   "type": "module",
   "bin": {
     "redline": "bin/redline.js"

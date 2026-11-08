@@ -9,7 +9,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "u
 const USAGE = `redline ${pkg.version}: browser plan review and code review for Claude Code
 
 Usage:
-  redline review [DIR | PR_URL] [--base <ref>] [--diff-type <type>] [--json]
+  redline review [DIR | MR_URL] [--base <ref>] [--diff-type <type>] [--json]
                                  Review code changes in the browser; feedback on stdout
   redline plan-hook              Claude Code PermissionRequest hook for ExitPlanMode
                                  (reads hook JSON on stdin; not for interactive use)
@@ -24,6 +24,11 @@ Environment:
   REDLINE_PORT=<n>               Fixed port instead of a random one
   REDLINE_REMOTE=1|0             Remote mode (SSH/devcontainer): bind 0.0.0.0, port 19533
   REDLINE_DATA_DIR=<dir>         Where plan history and drafts live (default ~/.redline)
+  REDLINE_AI=disabled            Turn off Ask AI and the AI review agent
+  REDLINE_AI_MODEL=<model>       Default Ask AI model (default sonnet)
+  REDLINE_REVIEW_MODEL=<model>   AI review agent model (default opus)
+
+MR_URL is a GitLab merge request (gitlab.com or self-hosted), fetched with glab.
 `;
 
 const [cmd, ...args] = process.argv.slice(2);
