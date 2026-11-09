@@ -1,12 +1,12 @@
 {
   "name": "redline-review",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser-based plan review and code review (local changes and GitLab MRs) for Claude Code, with Ask AI. Annotate plans and diffs, send structured feedback back to Claude.",
   "type": "module",
   "bin": {
     "redline": "bin/redline.js"
   },
-  "files": ["bin", "src", "ui", "skills", "hooks", ".claude-plugin", "README.md"],
+  "files": ["bin", "src", "ui", "skills", ".claude-plugin", "README.md"],
   "engines": {
     "node": ">=18"
   },

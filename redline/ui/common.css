@@ -181,7 +181,7 @@ textarea.input { width: 100%; resize: vertical; min-height: 64px; display: block
 .ask { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
 .ask-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
-.seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 13px; }
+.seg button { border: 0; background: var(--surface); padding: 5px 10px; cursor: pointer; font-size: 13px; white-space: nowrap; }
 .seg button.on { background: var(--surface-2); font-weight: 600; }
 .seg button:disabled { opacity: .45; cursor: not-allowed; }
 .seg.small button { padding: 3px 8px; font-size: 12px; }

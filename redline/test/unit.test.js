@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composePlanDenied, composeReviewMessage, formatPlanFeedback, formatReviewFeedback, REVIEW_APPROVED, REVIEW_CLOSED } from "../src/feedback.js";
+import { composePlanDenied, composePlanMessage, composeReviewMessage, formatPlanFeedback, formatReviewFeedback, REVIEW_APPROVED, REVIEW_CLOSED } from "../src/feedback.js";
 import { buildAskPrompt, buildReviewPrompt } from "../src/ai.js";
 import { translateEvent } from "../src/claude.js";
 import { parseMrUrl } from "../src/git.js";
-import { buildHookOutput } from "../src/plan.js";
+import { parsePlanArgs } from "../src/plan.js";
 import { parseReviewArgs } from "../src/review.js";
 import { lineDiff } from "../src/util.js";
 import { parseDiff, splitRows } from "../ui/diff-parse.js";
@@ -157,18 +157,29 @@ test("plan feedback formatting", () => {
   assert.match(composePlanDenied([{ type: "general", text: "x" }]), /^YOUR PLAN WAS NOT APPROVED\./);
 });
 
-test("plan hook output: approve, approve+mode, deny, dismiss", () => {
-  const input = { plan: "old" };
-  const a = buildHookOutput({ decision: "approved", permissionMode: "keep" }, input, "# P");
-  assert.deepEqual(a, {
-    hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow", updatedInput: { plan: "# P" } } },
+test("plan decision messages", () => {
+  assert.deepEqual(composePlanMessage({ decision: "approved", annotations: [] }, "/p/plan.md"), {
+    decision: "approved",
+    message: "# Plan Approved\n\nThe reviewer approved the plan. Proceed with the implementation.",
   });
-  const b = buildHookOutput({ decision: "approved", permissionMode: "acceptEdits" }, input, "# P");
-  assert.deepEqual(b.hookSpecificOutput.decision.updatedPermissions, [{ type: "setMode", mode: "acceptEdits", destination: "session" }]);
-  const c = buildHookOutput({ decision: "annotated", annotations: [{ type: "general", text: "no" }] }, input, "# P");
-  assert.equal(c.hookSpecificOutput.decision.behavior, "deny");
-  assert.match(c.hookSpecificOutput.decision.message, /# Plan Feedback/);
-  assert.equal(buildHookOutput({ decision: "dismissed" }, input, "# P"), null);
+  const notes = composePlanMessage({ decision: "approved", annotations: [{ type: "general", text: "Use feature flags" }] }, "/p/plan.md");
+  assert.equal(notes.decision, "approved");
+  assert.match(notes.message, /approved the plan with notes[\s\S]*## Overall\n\nUse feature flags/);
+  assert.doesNotMatch(notes.message, /# Plan Feedback/);
+  const denied = composePlanMessage({ decision: "annotated", annotations: [{ type: "general", text: "no" }] }, "/p/plan.md");
+  assert.equal(denied.decision, "annotated");
+  assert.match(denied.message, /revise the plan file \(\/p\/plan\.md\)[\s\S]*run `redline plan \/p\/plan\.md` again/);
+  assert.match(denied.message, /Do not start implementing\./);
+  assert.equal(composePlanMessage({ decision: "annotated", annotations: [{ type: "general", text: "  " }] }).decision, "dismissed", "empty feedback is not a change request");
+  assert.match(composePlanMessage({ decision: "dismissed" }).message, /^Plan review closed without a decision\./);
+});
+
+test("plan args", () => {
+  assert.deepEqual(parsePlanArgs(["--json", "p.md"]), { file: "p.md", json: true, help: false });
+  assert.equal(parsePlanArgs(["-"]).file, "-");
+  assert.throws(() => parsePlanArgs([]), /Missing the plan file/);
+  assert.throws(() => parsePlanArgs(["a.md", "b.md"]), /one plan file/);
+  assert.throws(() => parsePlanArgs(["--gate", "a.md"]), /Unknown option/);
 });
 
 test("review feedback formatting", () => {

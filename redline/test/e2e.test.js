@@ -16,11 +16,29 @@ function tmp(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+const EMPTY_CLAUDE_DIR = tmp("rl-noclaude-");
+
+/** Write a plan file in a fresh project directory. */
+function planFile(text, dir = tmp("rl-proj-")) {
+  const f = path.join(dir, "plan.md");
+  fs.writeFileSync(f, text);
+  return { dir, file: f };
+}
+
 /** Start the CLI, wait for its URL on stderr. */
 function launch(args, { input, cwd, env = {} } = {}) {
   const child = spawn(process.execPath, [BIN, ...args], {
     cwd,
-    env: { ...process.env, REDLINE_BROWSER: "none", REDLINE_PORT: "", REDLINE_REMOTE: "0", REDLINE_CLAUDE_BIN: FAKE_CLAUDE, ...env },
+    env: {
+      ...process.env,
+      REDLINE_BROWSER: "none",
+      REDLINE_PORT: "",
+      REDLINE_REMOTE: "0",
+      REDLINE_CLAUDE_BIN: FAKE_CLAUDE,
+      // Isolate from any real Claude Code session these tests may run under.
+      CLAUDE_CONFIG_DIR: EMPTY_CLAUDE_DIR,
+      ...env,
+    },
   });
   let stdout = "";
   let stderr = "";
@@ -46,41 +64,38 @@ async function post(url, body) {
   return JSON.parse(text);
 }
 
-const PLAN_EVENT = (plan, session = "s1") =>
-  JSON.stringify({
-    session_id: session,
-    cwd: "/work/proj",
-    hook_event_name: "PermissionRequest",
-    tool_name: "ExitPlanMode",
-    tool_input: { plan },
-  });
-
-test("plan hook: approve with permission mode", async () => {
-  const dataDir = tmp("rl-data-");
-  const { url, done } = launch(["plan-hook"], { input: PLAN_EVENT("# My Plan\n\n1. Do it"), env: { REDLINE_DATA_DIR: dataDir } });
+test("plan: approve prints # Plan Approved; approve with notes carries them", async () => {
+  const { dir, file } = planFile("# My Plan\n\n1. Do it");
+  const { url, done } = launch(["plan", "plan.md"], { cwd: dir, env: { REDLINE_DATA_DIR: tmp("rl-data-") } });
   const base = await url;
   const html = await (await fetch(base)).text();
   assert.match(html, /Plan Review/);
   const payload = await (await fetch(base + "api/payload")).json();
   assert.equal(payload.title, "My Plan");
+  assert.equal(payload.file, fs.realpathSync(file));
   assert.equal(payload.version, 1);
   assert.equal(payload.diff, null);
-  const js = await fetch(base + "static/plan.js");
-  assert.equal(js.status, 200);
+  assert.equal(payload.ai.sessionAvailable, false, "no Claude Code session in this test");
+  assert.equal((await fetch(base + "static/plan.js")).status, 200);
   assert.equal((await fetch(base + "static/../../package.json")).status, 404);
-  await post(base + "api/decision", { decision: "approved", permissionMode: "acceptEdits" });
-  const { code, stdout } = await done;
-  assert.equal(code, 0);
-  const out = JSON.parse(stdout);
-  assert.equal(out.hookSpecificOutput.decision.behavior, "allow");
-  assert.equal(out.hookSpecificOutput.decision.updatedInput.plan, "# My Plan\n\n1. Do it");
-  assert.equal(out.hookSpecificOutput.decision.updatedPermissions[0].mode, "acceptEdits");
+  await post(base + "api/decision", { decision: "approved", annotations: [] });
+  const r = await done;
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "# Plan Approved\n\nThe reviewer approved the plan. Proceed with the implementation.");
+
+  const second = launch(["plan", "--json", file], { env: { REDLINE_DATA_DIR: tmp("rl-data-") } });
+  const b2 = await second.url;
+  await post(b2 + "api/decision", { decision: "approved", annotations: [{ type: "comment", quote: "Do it", text: "Add a test too" }] });
+  const out = JSON.parse((await second.done).stdout);
+  assert.equal(out.decision, "approved");
+  assert.match(out.message, /^# Plan Approved\n\nThe reviewer approved the plan with notes\./);
+  assert.match(out.message, /> Do it\n\nAdd a test too/);
 });
 
-test("plan hook: deny with feedback, then revised plan shows a diff", async () => {
-  const dataDir = tmp("rl-data-");
-  const env = { REDLINE_DATA_DIR: dataDir };
-  const first = launch(["plan-hook"], { input: PLAN_EVENT("# P\n\nUse Redis.\n"), env });
+test("plan: request changes, then the revised file shows a diff; closing is not approval", async () => {
+  const env = { REDLINE_DATA_DIR: tmp("rl-data-") };
+  const { dir, file } = planFile("# P\n\nUse Redis.\n");
+  const first = launch(["plan", file], { cwd: dir, env });
   const base = await first.url;
   await post(base + "api/draft", { annotations: [{ id: "x", type: "comment", quote: "Redis", text: "draft" }] });
   await post(base + "api/decision", {
@@ -88,12 +103,12 @@ test("plan hook: deny with feedback, then revised plan shows a diff", async () =
     annotations: [{ type: "replace", quote: "Use Redis.", text: "Use Postgres.", section: "P" }],
   });
   const r1 = await first.done;
-  const out = JSON.parse(r1.stdout);
-  assert.equal(out.hookSpecificOutput.decision.behavior, "deny");
-  assert.match(out.hookSpecificOutput.decision.message, /YOUR PLAN WAS NOT APPROVED/);
-  assert.match(out.hookSpecificOutput.decision.message, /> Use Redis\.\n\nWith:\n\n> Use Postgres\./);
+  assert.match(r1.stdout, /^YOUR PLAN WAS NOT APPROVED\./);
+  assert.ok(r1.stdout.includes(`then run \`redline plan ${file}\` again`));
+  assert.match(r1.stdout, /> Use Redis\.\n\nWith:\n\n> Use Postgres\./);
 
-  const second = launch(["plan-hook"], { input: PLAN_EVENT("# P\n\nUse Postgres.\n"), env });
+  fs.writeFileSync(file, "# P\n\nUse Postgres.\n");
+  const second = launch(["plan", file], { cwd: dir, env });
   const base2 = await second.url;
   const payload = await (await fetch(base2 + "api/payload")).json();
   assert.equal(payload.version, 2);
@@ -105,25 +120,34 @@ test("plan hook: deny with feedback, then revised plan shows a diff", async () =
   assert.equal(payload.draft, null, "draft was keyed to the old plan text");
   await post(base2 + "api/decision", { decision: "dismissed" });
   const r2 = await second.done;
-  assert.equal(r2.stdout, "", "dismissed -> no output, Claude Code shows its own prompt");
+  assert.match(r2.stdout, /^Plan review closed without a decision\. Do not start implementing/);
 });
 
-test("plan hook: closing the tab dismisses after the grace period", async () => {
-  const { url, done } = launch(["plan-hook"], {
-    input: PLAN_EVENT("# Close me"),
-    env: { REDLINE_DATA_DIR: tmp("rl-data-"), REDLINE_CLOSE_GRACE_MS: "200" },
-  });
+test("plan: closing the tab dismisses after the grace period", async () => {
+  const { file } = planFile("# Close me");
+  const { url, done } = launch(["plan", file], { env: { REDLINE_DATA_DIR: tmp("rl-data-"), REDLINE_CLOSE_GRACE_MS: "200" } });
   const base = await url;
   await fetch(base + "api/closing", { method: "POST" });
   const r = await done;
   assert.equal(r.code, 0);
-  assert.equal(r.stdout, "");
+  assert.match(r.stdout, /^Plan review closed without a decision/);
 });
 
-test("plan hook: bad input falls through quietly", () => {
-  const r = spawnSync(process.execPath, [BIN, "plan-hook"], { input: "not json", encoding: "utf8" });
-  assert.equal(r.status, 0);
-  assert.equal(r.stdout, "");
+test("plan: usage errors", () => {
+  const run = (args, input) => spawnSync(process.execPath, [BIN, ...args], { encoding: "utf8", input, env: { ...process.env, REDLINE_BROWSER: "none" } });
+  let r = run(["plan"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /Missing the plan file/);
+  r = run(["plan", "/nonexistent/plan.md"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /cannot read/);
+  r = run(["plan", planFile("   \n").file]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /empty/);
+  r = run(["plan", "--gate", "x.md"]);
+  assert.equal(r.status, 2);
+  r = run(["plan-hook"], "{}");
+  assert.equal(r.status, 2, "the old hook entry point is gone");
 });
 
 function makeRepo() {
@@ -205,28 +229,34 @@ test("review --patch-file from stdin, dismissed", async () => {
   assert.equal(r.stdout.trim(), "Review session closed without feedback.");
 });
 
-test("install / uninstall into a temp Claude config dir", () => {
+test("install copies skills only, and removes a legacy hook entry", () => {
   const cfg = tmp("rl-claude-");
+  const other = { matcher: "Bash", hooks: [{ type: "command", command: "other" }] };
   fs.writeFileSync(
     path.join(cfg, "settings.json"),
-    JSON.stringify({ hooks: { PermissionRequest: [{ matcher: "Bash", hooks: [{ type: "command", command: "other" }] }] }, theme: "dark" }),
+    JSON.stringify({
+      theme: "dark",
+      hooks: { PermissionRequest: [other, { matcher: "ExitPlanMode", hooks: [{ type: "command", command: "redline plan-hook", timeout: 345600 }] }] },
+    }),
   );
   const env = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
   let r = spawnSync(process.execPath, [BIN, "install"], { encoding: "utf8", env });
   assert.equal(r.status, 0, r.stderr);
-  r = spawnSync(process.execPath, [BIN, "install"], { encoding: "utf8", env }); // idempotent
+  assert.match(r.stdout, /removed the old Redline plan hook/);
+  assert.match(r.stdout, /No hooks are installed/);
   const s = JSON.parse(fs.readFileSync(path.join(cfg, "settings.json"), "utf8"));
-  assert.equal(s.theme, "dark");
-  assert.equal(s.hooks.PermissionRequest.length, 2);
-  assert.equal(s.hooks.PermissionRequest[1].matcher, "ExitPlanMode");
-  assert.match(s.hooks.PermissionRequest[1].hooks[0].command, /plan-hook$/);
-  assert.ok(fs.existsSync(path.join(cfg, "skills", "redline-review", "SKILL.md")));
-  assert.ok(fs.existsSync(path.join(cfg, "skills", "redline", "SKILL.md")));
+  assert.deepEqual(s, { theme: "dark", hooks: { PermissionRequest: [other] } });
+  for (const k of ["redline", "redline-plan", "redline-review"]) assert.ok(fs.existsSync(path.join(cfg, "skills", k, "SKILL.md")), k);
+
+  // A clean config stays untouched: no settings.json is created.
+  const clean = tmp("rl-claude-");
+  r = spawnSync(process.execPath, [BIN, "install"], { encoding: "utf8", env: { ...process.env, CLAUDE_CONFIG_DIR: clean } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(clean, "settings.json")));
+
   r = spawnSync(process.execPath, [BIN, "uninstall"], { encoding: "utf8", env });
   assert.equal(r.status, 0, r.stderr);
-  const s2 = JSON.parse(fs.readFileSync(path.join(cfg, "settings.json"), "utf8"));
-  assert.deepEqual(s2.hooks.PermissionRequest, [{ matcher: "Bash", hooks: [{ type: "command", command: "other" }] }]);
-  assert.ok(!fs.existsSync(path.join(cfg, "skills", "redline")));
+  assert.ok(!fs.existsSync(path.join(cfg, "skills", "redline-plan")));
 });
 
 /** POST /api/ask and collect the NDJSON events. */
@@ -240,11 +270,15 @@ function readLog(file) {
   return fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 }
 
-test("plan Ask AI: fork the hook's session, then follow up on the fork", async () => {
+test("plan Ask AI: fork the parent Claude Code session, then follow up on the fork", async () => {
   const log = path.join(tmp("rl-log-"), "claude.jsonl");
-  const cwd = tmp("rl-proj-");
-  const event = JSON.stringify({ session_id: "parent-sess", cwd, tool_input: { plan: "# Cache plan\n\nUse Redis." } });
-  const { url, done } = launch(["plan-hook"], { input: event, env: { REDLINE_DATA_DIR: tmp("rl-data-"), FAKE_CLAUDE_LOG: log } });
+  const cwd = tmp("rl-sess-");
+  // Pretend this test process is a Claude Code session: redline's parent is us.
+  const cfg = tmp("rl-claude-");
+  fs.mkdirSync(path.join(cfg, "sessions"));
+  fs.writeFileSync(path.join(cfg, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId: "parent-sess", cwd }));
+  const { file } = planFile("# Cache plan\n\nUse Redis.");
+  const { url, done } = launch(["plan", file], { env: { REDLINE_DATA_DIR: tmp("rl-data-"), FAKE_CLAUDE_LOG: log, CLAUDE_CONFIG_DIR: cfg } });
   const base = await url;
   const payload = await (await fetch(base + "api/payload")).json();
   assert.deepEqual(
@@ -281,19 +315,8 @@ test("plan Ask AI: fork the hook's session, then follow up on the fork", async (
   await done;
 });
 
-test("plan hook stays silent inside a Redline AI child", () => {
-  const r = spawnSync(process.execPath, [BIN, "plan-hook"], {
-    input: PLAN_EVENT("# x"),
-    encoding: "utf8",
-    env: { ...process.env, REDLINE_AI_CHILD: "1", REDLINE_BROWSER: "none" },
-    timeout: 5000,
-  });
-  assert.equal(r.status, 0);
-  assert.equal(r.stdout, "");
-});
-
 test("Ask AI: unavailable when disabled; stop cancels a running answer", async () => {
-  const off = launch(["plan-hook"], { input: PLAN_EVENT("# Off"), env: { REDLINE_DATA_DIR: tmp("rl-data-"), REDLINE_AI: "disabled" } });
+  const off = launch(["plan", planFile("# Off").file], { env: { REDLINE_DATA_DIR: tmp("rl-data-"), REDLINE_AI: "disabled" } });
   const b1 = await off.url;
   const p1 = await (await fetch(b1 + "api/payload")).json();
   assert.equal(p1.ai.available, false);
@@ -302,7 +325,7 @@ test("Ask AI: unavailable when disabled; stop cancels a running answer", async (
   await post(b1 + "api/decision", { decision: "dismissed" });
   await off.done;
 
-  const slow = launch(["plan-hook"], { input: PLAN_EVENT("# Slow"), env: { REDLINE_DATA_DIR: tmp("rl-data-"), FAKE_CLAUDE_SLOW: "1" } });
+  const slow = launch(["plan", planFile("# Slow").file], { env: { REDLINE_DATA_DIR: tmp("rl-data-"), FAKE_CLAUDE_SLOW: "1" } });
   const b2 = await slow.url;
   const pending = ask(b2, { askId: "s1", question: "hm?", mode: "fresh" });
   await new Promise((r) => setTimeout(r, 400));

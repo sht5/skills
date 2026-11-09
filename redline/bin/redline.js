@@ -11,10 +11,10 @@ const USAGE = `redline ${pkg.version}: browser plan review and code review for C
 Usage:
   redline review [DIR | MR_URL] [--base <ref>] [--diff-type <type>] [--json]
                                  Review code changes in the browser; feedback on stdout
-  redline plan-hook              Claude Code PermissionRequest hook for ExitPlanMode
-                                 (reads hook JSON on stdin; not for interactive use)
+  redline plan <PLAN_FILE> [--json]
+                                 Review a markdown plan in the browser; decision on stdout
   redline sessions [--clean]     List live review sessions
-  redline install [--dry-run]    Add the plan hook + skills to ~/.claude
+  redline install [--dry-run]    Add the skills to ~/.claude/skills
   redline uninstall [--dry-run]  Remove them
   redline data-dir               Print the data directory (plan history, drafts)
   redline --version
@@ -39,14 +39,9 @@ async function main() {
       const { review } = await import("../src/review.js");
       return review(args);
     }
-    case "plan-hook":
-    case undefined: {
-      if (cmd === undefined && process.stdin.isTTY) {
-        process.stdout.write(USAGE);
-        return;
-      }
-      const { planHook } = await import("../src/plan.js");
-      return planHook();
+    case "plan": {
+      const { planCommand } = await import("../src/plan.js");
+      return planCommand(args);
     }
     case "sessions": {
       const { sessions } = await import("../src/sessions.js");
@@ -67,6 +62,7 @@ async function main() {
     case "--version":
       process.stdout.write(pkg.version + "\n");
       return;
+    case undefined:
     case "-h":
     case "--help":
     case "help":

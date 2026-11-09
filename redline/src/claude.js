@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { run } from "./util.js";
 
-/** Set in every child we start, so our own hook stays quiet inside it. */
+/** Set in every `claude` child we start, so they can be told apart from the user's own sessions. */
 export const CHILD_ENV = "REDLINE_AI_CHILD";
 
 /** Read-only investigation: files, scoped git, scoped glab, web search. */

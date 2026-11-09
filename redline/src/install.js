@@ -1,5 +1,6 @@
-// `redline install` / `redline uninstall`: wire Redline into Claude Code
-// without the plugin system (user-level skills + a settings.json hook).
+// `redline install` / `redline uninstall`: copy Redline's skills into
+// ~/.claude/skills. Redline uses no hooks; install only removes the hook
+// entry that versions before 0.2 added to settings.json.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -8,19 +9,15 @@ import { fileURLToPath } from "node:url";
 import { readJSON, run, writeFileAtomic } from "./util.js";
 
 const PKG_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SKILLS = ["redline", "redline-review"];
-const HOOK_TIMEOUT_S = 345600; // 4 days: a plan can wait for its reviewer
-const MARK = "plan-hook";
+const SKILLS = ["redline", "redline-plan", "redline-review"];
 
 function claudeDir() {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
 }
 
-function hookCommand() {
-  const onPath = run(process.platform === "win32" ? "where" : "which", ["redline"]);
-  if (onPath.ok && onPath.stdout.trim()) return `redline ${MARK}`;
-  const bin = path.join(PKG_ROOT, "bin", "redline.js");
-  return `"${process.execPath}" "${bin}" ${MARK}`;
+function onPath() {
+  const r = run(process.platform === "win32" ? "where" : "which", ["redline"]);
+  return r.ok && Boolean(r.stdout.trim());
 }
 
 function isOurs(h) {
@@ -37,53 +34,45 @@ function copyDir(src, dst) {
   }
 }
 
+/** Remove a hook entry left in settings.json by Redline < 0.2. Returns the settings file it changed, or null. */
+function removeLegacyHook(dryRun) {
+  const settingsFile = path.join(claudeDir(), "settings.json");
+  const settings = readJSON(settingsFile, null);
+  const list = settings?.hooks?.PermissionRequest;
+  if (!Array.isArray(list) || !list.some((g) => (g.hooks || []).some(isOurs))) return null;
+  for (const g of list) g.hooks = (g.hooks || []).filter((h) => !isOurs(h));
+  settings.hooks.PermissionRequest = list.filter((g) => g.hooks.length > 0);
+  if (!settings.hooks.PermissionRequest.length) delete settings.hooks.PermissionRequest;
+  if (!Object.keys(settings.hooks).length) delete settings.hooks;
+  if (!dryRun) writeFileAtomic(settingsFile, JSON.stringify(settings, null, 2) + "\n");
+  return settingsFile;
+}
+
 export function install({ dryRun = false } = {}) {
   const dir = claudeDir();
-  const settingsFile = path.join(dir, "settings.json");
-  const settings = readJSON(settingsFile, {}) || {};
-  settings.hooks ||= {};
-  const list = (settings.hooks.PermissionRequest ||= []);
-  // Remove any previous Redline entry, then add a fresh one.
-  for (const group of list) group.hooks = (group.hooks || []).filter((h) => !isOurs(h));
-  settings.hooks.PermissionRequest = list.filter((g) => (g.hooks || []).length > 0);
-  const command = hookCommand();
-  settings.hooks.PermissionRequest.push({
-    matcher: "ExitPlanMode",
-    hooks: [{ type: "command", command, timeout: HOOK_TIMEOUT_S }],
-  });
-
   const lines = [];
   for (const s of SKILLS) {
     const dst = path.join(dir, "skills", s);
     lines.push(`skill   ${dst}`);
     if (!dryRun) copyDir(path.join(PKG_ROOT, "skills", s), dst);
   }
-  lines.push(`hook    ${settingsFile}  (PermissionRequest / ExitPlanMode -> ${command})`);
-  if (!dryRun) writeFileAtomic(settingsFile, JSON.stringify(settings, null, 2) + "\n");
-  const onPath = command.startsWith("redline ");
+  const legacy = removeLegacyHook(dryRun);
+  if (legacy) lines.push(`hook    removed the old Redline plan hook from ${legacy}`);
   return (
     `${dryRun ? "Would install" : "Installed"}:\n  ${lines.join("\n  ")}\n` +
-    (onPath
+    (onPath()
       ? ""
-      : `\nNote: \`redline\` is not on your PATH, so /redline-review will not work until it is.\n` +
-        `Run \`npm install -g ${PKG_ROOT}\` (or \`npm link\` inside it), then \`redline install\` again.\n`) +
-    `\nRestart Claude Code (or run /hooks) to pick up the hook.`
+      : `\nNote: \`redline\` is not on your PATH, so the skills cannot run it yet.\n` +
+        `Run \`npm install -g ${PKG_ROOT}\` (or \`npm link\` inside it).\n`) +
+    `\nNo hooks are installed. Start a new Claude Code session to pick up the skills.`
   );
 }
 
 export function uninstall({ dryRun = false } = {}) {
   const dir = claudeDir();
-  const settingsFile = path.join(dir, "settings.json");
   const lines = [];
-  const settings = readJSON(settingsFile, null);
-  if (settings?.hooks?.PermissionRequest) {
-    for (const g of settings.hooks.PermissionRequest) g.hooks = (g.hooks || []).filter((h) => !isOurs(h));
-    settings.hooks.PermissionRequest = settings.hooks.PermissionRequest.filter((g) => g.hooks.length > 0);
-    if (!settings.hooks.PermissionRequest.length) delete settings.hooks.PermissionRequest;
-    if (!Object.keys(settings.hooks).length) delete settings.hooks;
-    if (!dryRun) writeFileAtomic(settingsFile, JSON.stringify(settings, null, 2) + "\n");
-    lines.push(`hook    removed from ${settingsFile}`);
-  }
+  const legacy = removeLegacyHook(dryRun);
+  if (legacy) lines.push(`hook    removed the old Redline plan hook from ${legacy}`);
   for (const s of SKILLS) {
     const dst = path.join(dir, "skills", s);
     if (fs.existsSync(dst)) {

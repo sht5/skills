@@ -1,36 +1,47 @@
-// `redline plan-hook`: Claude Code PermissionRequest hook for ExitPlanMode.
+// `redline plan <file>`: browser review of a plan written to a markdown file.
 //
-// Reads the hook event on stdin, opens the plan in the browser, and prints a
-// PermissionRequest decision on stdout:
-//   approve  -> {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow",...}}}
-//   feedback -> {"hookSpecificOutput":{...,"decision":{"behavior":"deny","message":"..."}}}
-//   closed   -> no output (Claude Code falls back to its own approval prompt)
+// No hooks: Claude runs this command itself (via the redline-plan skill), it
+// blocks until the reviewer decides, and the decision is printed on stdout:
+//   approved   "# Plan Approved" (+ optional notes to follow while implementing)
+//   annotated  "YOUR PLAN WAS NOT APPROVED. ..." + "# Plan Feedback"
+//   dismissed  "Plan review closed without a decision."
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { attachAI } from "./ai.js";
-import { CHILD_ENV } from "./claude.js";
-import { composePlanDenied } from "./feedback.js";
+import { findParentClaudeSession } from "./claude.js";
+import { composePlanMessage } from "./feedback.js";
 import { startSession } from "./session.js";
-import { dataDir, ensureDir, hash, lineDiff, projectSlug, readStdin, writeFileAtomic } from "./util.js";
+import { dataDir, ensureDir, hash, lineDiff, projectSlug, writeFileAtomic } from "./util.js";
 
-/** Find the plan text in an ExitPlanMode tool_input. */
-export function resolvePlan(toolInput = {}) {
-  if (typeof toolInput.plan === "string" && toolInput.plan.trim()) return toolInput.plan;
-  const file = toolInput.planFilePath || toolInput.plan_file_path;
-  if (file && fs.existsSync(file)) return fs.readFileSync(file, "utf8");
-  // Last resort: the newest plan file Claude Code wrote.
-  const dir = path.join(os.homedir(), ".claude", "plans");
-  try {
-    const newest = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
-      .sort((a, b) => b.t - a.t)[0];
-    if (newest && Date.now() - newest.t < 10 * 60 * 1000) return fs.readFileSync(path.join(dir, newest.f), "utf8");
-  } catch {}
-  return "";
+export const PLAN_USAGE = `Usage: redline plan [--json] <PLAN_FILE | ->
+
+Open a markdown plan in the browser for review. Blocks until the reviewer
+approves, requests changes, or closes the tab; the decision is printed on stdout.
+Run it again on the revised file: the reviewer sees what changed since last time.
+
+Options:
+  --json        Print {"decision","message"} instead of plain text
+  -h, --help    Show this help
+
+Output (plain text):
+  approved   "# Plan Approved ..."            (may include notes to follow)
+  annotated  "YOUR PLAN WAS NOT APPROVED. ..." followed by "# Plan Feedback"
+  closed     "Plan review closed without a decision."`;
+
+export function parsePlanArgs(argv) {
+  const opts = { file: null, json: false, help: false };
+  const rest = [];
+  for (const a of argv) {
+    if (a === "-h" || a === "--help") opts.help = true;
+    else if (a === "--json") opts.json = true;
+    else if (a.startsWith("-") && a !== "-") throw new Error(`Unknown option ${a}. Run "redline plan --help".`);
+    else rest.push(a);
+  }
+  if (rest.length > 1) throw new Error(`Expected one plan file, got: ${rest.join(" ")}`);
+  opts.file = rest[0] || null;
+  if (!opts.file && !opts.help) throw new Error("Missing the plan file. Write the plan to a markdown file and pass its path.");
+  return opts;
 }
 
 function planTitle(plan) {
@@ -38,9 +49,9 @@ function planTitle(plan) {
   return m ? m[1].trim() : "Plan";
 }
 
-/** Version history: one folder per project, one series per Claude session. */
-function historyDir(cwd, sessionId) {
-  return path.join(dataDir(), "plans", projectSlug(cwd), String(sessionId || "no-session").replace(/[^\w.-]/g, "_"));
+/** Version history: one folder per project, one series per plan file. */
+function historyDir(cwd, file) {
+  return path.join(dataDir(), "plans", projectSlug(cwd), hash(file || "stdin", 12));
 }
 
 function loadHistory(dir) {
@@ -55,46 +66,34 @@ function loadHistory(dir) {
   }
 }
 
-/** Build the decision object Claude Code expects. Exported for tests. */
-export function buildHookOutput(result, toolInput, plan) {
-  if (result.decision === "approved") {
-    const decision = { behavior: "allow", updatedInput: { ...toolInput, plan } };
-    if (result.permissionMode && result.permissionMode !== "keep") {
-      decision.updatedPermissions = [{ type: "setMode", mode: result.permissionMode, destination: "session" }];
-    }
-    return { hookSpecificOutput: { hookEventName: "PermissionRequest", decision } };
-  }
-  if (result.decision === "annotated") {
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PermissionRequest",
-        decision: { behavior: "deny", message: composePlanDenied(result.annotations || []) },
-      },
-    };
-  }
-  return null;
-}
-
-export async function planHook() {
-  const raw = await readStdin();
-  // Inside an Ask AI / review-agent child of ours: never open another review.
-  if (process.env[CHILD_ENV] === "1") process.exit(0);
-  let event = {};
+export async function planCommand(argv) {
+  let opts;
   try {
-    event = raw.trim() ? JSON.parse(raw) : {};
-  } catch {
-    process.stderr.write("redline plan-hook: expected Claude Code hook JSON on stdin\n");
-    process.exit(0); // never break the agent: fall back to the native prompt
+    opts = parsePlanArgs(argv);
+  } catch (e) {
+    process.stderr.write(`redline plan: ${e.message}\n`);
+    process.exit(2);
   }
-  const toolInput = event.tool_input || {};
-  const plan = resolvePlan(toolInput);
-  if (!plan.trim()) {
-    process.stderr.write("redline plan-hook: no plan found in hook input; using the built-in prompt\n");
-    process.exit(0);
+  if (opts.help) {
+    process.stdout.write(PLAN_USAGE + "\n");
+    return;
   }
-  const cwd = event.cwd || process.cwd();
 
-  const dir = ensureDir(historyDir(cwd, event.session_id));
+  const cwd = process.cwd();
+  const file = opts.file === "-" ? null : path.resolve(opts.file);
+  let plan;
+  try {
+    plan = file ? fs.readFileSync(file, "utf8") : fs.readFileSync(0, "utf8");
+  } catch (e) {
+    process.stderr.write(`redline plan: cannot read ${file || "stdin"}: ${e.message}\n`);
+    process.exit(1);
+  }
+  if (!plan.trim()) {
+    process.stderr.write(`redline plan: the plan is empty\n`);
+    process.exit(1);
+  }
+
+  const dir = ensureDir(historyDir(cwd, file));
   const versions = loadHistory(dir);
   const lastV = versions.at(-1);
   const previous = lastV ? fs.readFileSync(path.join(dir, `v${lastV}.md`), "utf8") : null;
@@ -103,10 +102,12 @@ export async function planHook() {
     version += 1;
     writeFileAtomic(path.join(dir, `v${version}.md`), plan);
   }
-  // Compare against the version before this one (if the plan is unchanged, against v-1).
+  // Compare against the version before this one (if unchanged, against v-1).
   const prevVersion = previous !== plan ? lastV : versions.at(-2);
   const prevText = prevVersion ? fs.readFileSync(path.join(dir, `v${prevVersion}.md`), "utf8") : null;
 
+  // The Claude Code session that ran us, for Ask AI's "This session".
+  const parent = findParentClaudeSession();
   const api = {};
   const ai = attachAI(api, {
     kind: "plan",
@@ -114,8 +115,8 @@ export async function planHook() {
     project: cwd,
     version,
     cwd,
-    sessionId: event.session_id || null,
-    sessionCwd: cwd,
+    sessionId: parent?.sessionId || null,
+    sessionCwd: parent?.cwd || null,
   });
 
   const session = await startSession({
@@ -128,23 +129,20 @@ export async function planHook() {
       kind: "plan",
       title: planTitle(plan),
       plan,
+      file,
       project: cwd,
       version,
       previousVersion: prevVersion || null,
       diff: prevText != null ? lineDiff(prevText, plan) : null,
-      permissionMode: event.permission_mode || null,
     },
   });
   const result = await session.result;
 
   try {
-    writeFileAtomic(
-      path.join(dir, `v${version}.decision.json`),
-      JSON.stringify({ at: new Date().toISOString(), ...result }, null, 2),
-    );
+    writeFileAtomic(path.join(dir, `v${version}.decision.json`), JSON.stringify({ at: new Date().toISOString(), ...result }, null, 2));
   } catch {}
 
-  const out = buildHookOutput(result, toolInput, plan);
-  if (out) process.stdout.write(JSON.stringify(out) + "\n");
+  const out = composePlanMessage(result, file);
+  process.stdout.write((opts.json ? JSON.stringify(out) : out.message) + "\n");
   process.exit(0);
 }

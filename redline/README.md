@@ -1,8 +1,11 @@
 # Redline
 
-Browser-based **plan review** and **code review** for **Claude Code**, with **Ask AI** built in. Redline is a small, local alternative to Plannotator, with no npm dependencies. It keeps only plan review and the review slash command, supports Claude Code only, and works with GitLab (through `glab`) for merge requests.
+Browser-based **plan review** and **code review** for **Claude Code**, with **Ask AI** built in. Redline is a small, local alternative to Plannotator, with no npm dependencies. It keeps only plan review and code review, supports Claude Code only, works with GitLab (through `glab`) for merge requests, and **uses no hooks**: everything runs through skills that call the `redline` CLI.
 
-- **Plan review (automatic).** When Claude calls `ExitPlanMode`, the plan opens in your browser. Select any passage to comment on it, replace it, remove it, add text after it, or **ask Claude about it**. Then **Approve**, optionally switching the permission mode, or **Request changes**. Claude receives your notes, each with the exact quote it refers to, and must revise the plan. When the revised plan arrives, a **Changes since vN** tab shows what Claude changed.
+- **Plan review (`/redline-plan`).** Claude writes its plan to a markdown file and runs `redline plan <file>`, which opens the plan in your browser. Claude also uses this skill on its own when you ask it to plan first. Select any passage to comment on it, replace it, remove it, add text after it, or **ask Claude about it**. Then choose one of three outcomes:
+  - **Approve**: Claude implements the plan.
+  - **Approve with notes**: Claude implements the plan and follows your notes.
+  - **Request changes**: Claude revises the same file and asks for review again. A **Changes since vN** tab shows what it changed.
 - **Code review (`/redline-review`).** This opens a diff viewer for your working tree, another worktree, or a **GitLab merge request** on gitlab.com or a self-hosted instance. Click a line number to comment, shift-click to select a range, and use **Suggest change** to propose replacement code. You can also leave file-level and general comments, mark files as viewed, switch between unified and split views, and change the diff type and base ref without restarting. **Send feedback** gives Claude a structured, per-file and per-line report.
 - **Ask AI (both pages).** A chat panel answers questions about the plan or diff, or about the passage or lines you selected, while you review. Answers stream in and support follow-ups, and you can turn an answer into a note with one click.
   - **This session** forks the Claude Code session that opened the review, so Claude answers with the whole conversation in mind. Your own session is left untouched.
@@ -20,11 +23,11 @@ Requires Node.js 18 or later and Claude Code (the `claude` CLI powers Ask AI). F
 # 1. Put the `redline` CLI on your PATH
 npm install -g ./redline        # or: cd redline && npm link
 
-# 2. Wire it into Claude Code (adds the ExitPlanMode hook + the two skills to ~/.claude)
+# 2. Add the skills to Claude Code (copies them to ~/.claude/skills; no hooks, no settings changes)
 redline install                 # --dry-run to preview; `redline uninstall` reverses it
 ```
 
-Restart Claude Code, or open `/hooks`, so it picks up the hook.
+Start a new Claude Code session so it picks up the skills. If you installed Redline 0.1, `redline install` also removes the plan hook that version added to `settings.json`.
 
 **Or as a Claude Code plugin.** This directory is also a plugin and a single-plugin marketplace. You still need step 1, because the review skill calls `redline` from your PATH.
 
@@ -37,7 +40,8 @@ Restart Claude Code, or open `/hooks`, so it picks up the hook.
 
 | You want | Do |
 | --- | --- |
-| Review a plan | Use plan mode as usual. When Claude calls `ExitPlanMode`, the browser opens. |
+| Plan first, then implement | `/redline-plan add rate limiting to the API`, or ask Claude to "plan it in Redline first" |
+| Review a plan file you already have | `/redline-plan docs/plan.md` |
 | Review your current changes | `/redline-review` |
 | Review another worktree | `/redline-review ../other-worktree` |
 | Review a GitLab MR | `/redline-review https://gitlab.com/group/project/-/merge_requests/42` |
@@ -47,7 +51,7 @@ Restart Claude Code, or open `/hooks`, so it picks up the hook.
 | Ask Claude about some lines of code | Click a line number (shift-click for a range), then choose **✦ Ask AI**. Or open **✦ Ask AI** in the top bar. |
 | Have Claude review the diff first | **✦ AI review** in the top bar |
 
-On the plan page, **Close** gives no decision, and Claude Code falls back to its own terminal prompt. On the review page, **Close** tells Claude "Review session closed without feedback", and Claude stops. Closing the tab without clicking anything does the same after 5 seconds. Reloading the tab is safe.
+**Close** on either page tells Claude the review ended without a decision. On the plan page Claude then asks you how to proceed, and on the review page Claude stops. Neither counts as an approval. Closing the tab without clicking anything does the same after 5 seconds. Reloading the tab is safe.
 
 Keyboard shortcuts:
 
@@ -59,7 +63,7 @@ Keyboard shortcuts:
 
 ```
 redline review [DIR | MR_URL] [--base <ref>] [--diff-type <type>] [--patch-file <path|->] [--json]
-redline plan-hook              # the hook entry point (reads hook JSON on stdin)
+redline plan <PLAN_FILE | -> [--json]   # review a markdown plan; decision on stdout
 redline sessions [--open N]    # list / reopen live sessions (e.g. after closing a tab)
 redline install | uninstall [--dry-run]
 redline data-dir
@@ -80,14 +84,13 @@ Diff types: `since-base` (the default) shows everything a merge request would sh
 ## How it works
 
 ```
-ExitPlanMode ──► PermissionRequest hook ──► redline plan-hook ──► local HTTP server + browser UI
-                                                   │
-             {"behavior":"allow", updatedInput, updatedPermissions}   ◄── Approve
-             {"behavior":"deny",  message: "YOUR PLAN WAS NOT APPROVED… # Plan Feedback …"}  ◄── Request changes
-             (no output → Claude Code's normal prompt)                ◄── Close
+/redline-plan ──► Claude writes .redline/plans/<name>.md ──► runs `redline plan <file>` (background, long timeout)
+                     stdout: "# Plan Approved …" ──► Claude implements (following any notes)
+                             "YOUR PLAN WAS NOT APPROVED … # Plan Feedback …" ──► Claude edits the file and reruns
+                             "Plan review closed without a decision." ──► Claude asks you
 
 /redline-review ──► skill runs  !`redline review $ARGUMENTS`  ──► git diff / glab mr diff ──► browser UI
-                                     stdout: "# Code Review Feedback …" ──► Claude acts on it
+                     stdout: "# Code Review Feedback …" ──► Claude acts on it
 
 Ask AI ──► POST /api/ask ──► claude -p --output-format stream-json --permission-mode dontAsk (read-only tools)
              "This session": --resume <session> --fork-session  (follow-ups: --resume <fork>)
@@ -97,17 +100,16 @@ AI review ──► claude -p --json-schema {findings…} --no-session-persisten
 
 **Which session does "This session" fork?**
 
-- For plan review, it's the `session_id` from the hook event.
-- For `/redline-review`, Redline walks up its parent processes to the Claude Code process and reads that process's entry in `~/.claude/sessions/<pid>.json`.
+- Claude Code runs `redline plan` and `redline review` itself, so Redline walks up its parent processes to the Claude Code process and reads that process's entry in `~/.claude/sessions/<pid>.json`.
 - If no session is found, only **Fresh** is offered.
 - Forked asks run in that session's directory, so `--resume` can find it.
 
-Every `claude` child runs with `REDLINE_AI_CHILD=1`, so Redline's own plan hook never fires inside it.
+Redline registers no hooks and changes no Claude Code settings. Its `claude` children are ordinary `claude -p` runs, so your own hooks and settings apply to them as usual.
 
 | Path | What it holds |
 | --- | --- |
 | `bin/redline.js` | The CLI entry point |
-| `src/plan.js` | The hook. It keeps a version history per project and session, which the diff view uses. |
+| `src/plan.js` | `redline plan`. It keeps a version history per project and plan file, which the diff view uses. |
 | `src/review.js`, `src/git.js` | Diff building: merge-base detection, untracked files, GitLab MRs through `glab` |
 | `src/claude.js` | The `claude -p` bridge: stream parsing, session discovery, read-only tool policy |
 | `src/ai.js` | Ask AI and AI review endpoints, and their prompts |
@@ -115,8 +117,9 @@ Every `claude` child runs with `REDLINE_AI_CHILD=1`, so Redline's own plan hook 
 | `src/feedback.js` | The exact markdown Claude receives |
 | `ui/` | Plain HTML/CSS/JS with no build step, including a markdown renderer, a unified-diff parser and the Ask AI panel |
 | `skills/redline` | The reference skill |
+| `skills/redline-plan` | The `/redline-plan` workflow (write the plan, run `redline plan`, act on the decision) |
 | `skills/redline-review` | The `/redline-review` slash command |
-| `hooks/hooks.json`, `.claude-plugin/` | Plugin packaging |
+| `.claude-plugin/` | Plugin packaging (skills only) |
 
 ## Tests
 

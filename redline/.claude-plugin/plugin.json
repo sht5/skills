@@ -1,6 +1,6 @@
 {
   "name": "redline",
-  "description": "Browser-based plan review (on ExitPlanMode) and code review (/redline-review, local changes and GitLab MRs) with Ask AI and line-level annotations that flow back to Claude.",
-  "version": "0.1.0",
-  "keywords": ["planning", "code-review", "gitlab", "hooks", "ExitPlanMode", "annotations", "ask-ai"]
+  "description": "Browser-based plan review (/redline-plan) and code review (/redline-review, local changes and GitLab MRs) with Ask AI and line-level annotations that flow back to Claude. Uses no hooks.",
+  "version": "0.2.0",
+  "keywords": ["planning", "code-review", "gitlab", "annotations", "ask-ai"]
 }

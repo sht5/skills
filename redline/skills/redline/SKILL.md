@@ -1,19 +1,19 @@
 ---
 name: redline
-description: "Reference for Redline, the local browser-based review layer for plans and code in Claude Code: how plan review on ExitPlanMode works and how to read its feedback, how to run `redline review` (local changes, another directory, a GitLab merge request, a patch file) with the right flags, how its Ask AI and AI review features relate to you, and how to interpret its output. Use when the user asks to review code or a plan in Redline, asks for a browser or visual review, or when you need to choose `redline` commands or flags yourself."
+description: "Reference for Redline, the local browser-based review layer for plans and code in Claude Code: how to run `redline plan` and read its decision, how to run `redline review` (local changes, another directory, a GitLab merge request, a patch file) with the right flags, how its Ask AI and AI review features relate to you, and how to interpret its output. Use when the user asks to review code or a plan in Redline, asks for a browser or visual review, or when you need to choose `redline` commands or flags yourself."
 ---
 
 # Redline
 
-Redline opens plans and diffs in a local browser UI. The human marks them up, and their structured feedback comes back to you: through the plan hook's decision, or on the stdout of `redline review`. Everything stays on this machine. A session serves on a random `localhost` port (fixed port 19533 in remote mode) and blocks until the reviewer approves, sends feedback or closes the tab.
+Redline opens plans and diffs in a local browser UI. The human marks them up, and their structured feedback comes back to you on the stdout of `redline plan` or `redline review`. Redline uses no hooks: a review only happens when you, or a skill, run one of these commands. Everything stays on this machine. A session serves on a random `localhost` port (fixed port 19533 in remote mode) and blocks until the reviewer approves, sends feedback or closes the tab.
 
-The `redline-review` skill (`/redline-review`) is the thin launcher for code review. Use this reference when you need to pick commands or flags yourself.
+The `redline-plan` skill (`/redline-plan`) is the workflow for plan approval, and `redline-review` (`/redline-review`) is the launcher for code review. Use this reference when you need to pick commands or flags yourself.
 
 ## Choose the command
 
 | The user wants | Do this |
 | --- | --- |
-| Review a plan you wrote | Nothing. Write the plan and call `ExitPlanMode`: the Redline hook opens it in the browser automatically. Never run `redline plan-hook` yourself. |
+| Get a plan approved before implementing | Follow the `redline-plan` skill: write the plan to a markdown file, then run `redline plan <file>` |
 | Review the current code changes | `redline review` |
 | Review another repo or worktree | `redline review ../other-worktree` |
 | Review a GitLab merge request | `redline review <MR_URL>` (needs an authenticated `glab`; gitlab.com or self-hosted) |
@@ -22,13 +22,19 @@ The `redline-review` skill (`/redline-review`) is the thin launcher for code rev
 | Review a diff that is not in a repository | `redline review --patch-file changes.diff` (`-` reads stdin) |
 | Find a review tab that was closed | `redline sessions`, then `redline sessions --open N` |
 
-## Plan review (automatic)
+## `redline plan`
 
-When you call `ExitPlanMode`, the `PermissionRequest` hook runs `redline plan-hook`. The reviewer reads the rendered plan and selects passages to comment on, replace, remove, or add text after. They can also leave overall feedback, and compare the plan with its previous version. Then:
+```bash
+redline plan [--json] <PLAN_FILE | ->
+```
 
-- **Approved**: the tool call is allowed and you proceed. The reviewer may also change the permission mode, for example to auto-accept edits.
-- **Changes requested**: the tool call is denied with a message that starts `YOUR PLAN WAS NOT APPROVED.` and is followed by `# Plan Feedback`. Each numbered item quotes the exact passage and says what to do: **Comment**, **Replace this … With:**, **Remove this**, or **Add after this … Add:**. Revise the plan to address every item. Keep the title unless asked otherwise. Do not resubmit it unchanged. Then call `ExitPlanMode` again. The reviewer sees a diff against the version they reviewed.
-- **Closed**: nothing comes back from Redline, and Claude Code shows its normal approval prompt instead.
+This opens the markdown plan in the browser. The reviewer selects passages to comment on, replace, remove, or add text after, leaves overall feedback, and can ask Claude about the plan. When you run it again on the same file, Redline records a new version and the reviewer gets a **Changes since vN** view. Run it in the background with `timeout: 7200000`; see **Running it** below.
+
+| Outcome | Plain text | `--json` `decision` |
+| --- | --- | --- |
+| Approved | `# Plan Approved`, then "Proceed with the implementation." Notes may follow; treat them as guidance while you implement. | `approved` |
+| Changes requested | `YOUR PLAN WAS NOT APPROVED.`, then `# Plan Feedback`. Each numbered item quotes the exact passage and says what to do: **Comment**, **Replace this … With:**, **Remove this**, or **Add after this … Add:**. Revise the same file to address every item, keep the title unless asked otherwise, then run `redline plan` again. Do not implement yet. | `annotated` |
+| Closed | `Plan review closed without a decision.` Do not implement; ask the user. | `dismissed` |
 
 ## `redline review`
 
@@ -44,7 +50,7 @@ redline review [--base <ref>] [--diff-type <type>] [--patch-file <path|->] [--js
 
 ### Running it
 
-The command blocks until the human decides, which can take many minutes. Run it in the foreground with a long timeout, or in the background with `run_in_background` and `timeout: 7200000`, then read stdout when it exits. Never kill it to "finish" the review: a session that ends without a decision reads as no feedback. If a time limit stopped it, run the same command again, and the reviewer's unsent comments are restored from the draft.
+This applies to `redline plan` too. The command blocks until the human decides, which can take many minutes. Run it in the foreground with a long timeout, or in the background with `run_in_background` and `timeout: 7200000`, then read stdout when it exits. Never kill it to "finish" the review: a session that ends without a decision reads as no feedback. If a time limit stopped it, run the same command again, and the reviewer's unsent comments are restored from the draft.
 
 ### Output (stdout)
 
@@ -89,7 +95,7 @@ An answer the reviewer liked can be turned into a note, so you may receive feedb
 
 ## Do not
 
-- Do not run `redline plan-hook` interactively. It is the hook entry point and reads hook JSON on stdin.
-- Do not scrape the browser UI. The hook decision and stdout are the whole contract.
+- Do not scrape the browser UI. Stdout is the whole contract.
 - Do not guess flags. Run `redline review --help` when unsure, because unknown flags fail on purpose.
 - Do not start a review when no human is there to answer it, because it blocks until someone decides.
+- Do not implement a plan before `redline plan` reports `# Plan Approved`.

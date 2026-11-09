@@ -26,7 +26,7 @@ async function init() {
   setupTheme($("#theme"));
   watchClose();
   document.title = `${payload.title} · Plan Review`;
-  $("#crumb").innerHTML = `<strong>${escapeHtml(payload.title)}</strong> · ${escapeHtml(payload.project || "")}`;
+  $("#crumb").innerHTML = `<strong>${escapeHtml(payload.title)}</strong> · ${escapeHtml(payload.file || payload.project || "")}`;
   if (payload.version) {
     $("#version").hidden = false;
     $("#version").textContent = `v${payload.version}`;
@@ -37,15 +37,6 @@ async function init() {
     $("#diffbtn").textContent = `Changes since v${payload.previousVersion} (${changed})`;
     $$("#viewseg button").forEach((b) => (b.onclick = () => setView(b.dataset.view)));
   }
-  try {
-    const m = localStorage.getItem("redline-mode");
-    if (m) $("#mode").value = m;
-  } catch {}
-  $("#mode").onchange = () => {
-    try {
-      localStorage.setItem("redline-mode", $("#mode").value);
-    } catch {}
-  };
 
   doc.innerHTML = renderMarkdown(payload.plan);
   $$(".tabs button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
@@ -393,22 +384,21 @@ function allAnnotations() {
 }
 
 async function approve() {
-  const n = allAnnotations().length;
-  if (n) {
+  const anns = allAnnotations();
+  if (anns.length) {
     const choice = await ask({
       title: "Approve with notes?",
-      body: `You have ${n} note${n > 1 ? "s" : ""}. Approving lets Claude start right away and does not send them. Send them as a change request instead?`,
+      body: `You have ${anns.length} note${anns.length > 1 ? "s" : ""}. Approve and let Claude follow them while implementing, or send them as a change request so Claude revises the plan first?`,
       buttons: [
         { label: "Cancel", value: null, cls: "ghost" },
-        { label: "Approve anyway", value: "approve" },
+        { label: "Approve with notes", value: "approve" },
         { label: "Request changes", value: "deny", cls: "primary" },
       ],
     });
     if (choice === "deny") return requestChanges();
     if (choice !== "approve") return;
   }
-  const mode = $("#mode").value;
-  await decide("approved", { permissionMode: mode }, { title: "Plan approved", detail: "Claude is continuing with the plan." });
+  await decide("approved", { annotations: anns }, { title: "Plan approved", detail: anns.length ? "Claude is implementing the plan and following your notes." : "Claude is implementing the plan." });
 }
 
 async function requestChanges() {
@@ -424,13 +414,13 @@ async function requestChanges() {
 async function closeSession() {
   const choice = await ask({
     title: "Close without deciding?",
-    body: "Claude Code will fall back to its own approval prompt in the terminal. Your notes stay saved as a draft.",
+    body: "Claude is told the review closed without a decision and will ask you how to proceed. Your notes stay saved as a draft.",
     buttons: [
       { label: "Cancel", value: null, cls: "ghost" },
       { label: "Close", value: "close", cls: "primary" },
     ],
   });
-  if (choice === "close") await decide("dismissed", {}, { title: "Closed", detail: "Answer the prompt in your terminal." });
+  if (choice === "close") await decide("dismissed", {}, { title: "Closed", detail: "Claude will ask you how to proceed." });
 }
 
 function onKey(e) {

@@ -1,13 +1,20 @@
 // Turns reviewer annotations into the markdown the agent reads.
 
-export const PLAN_DENIED_HEADER = `YOUR PLAN WAS NOT APPROVED.
+export function planDeniedHeader(file) {
+  const where = file ? `the plan file (${file})` : "the plan";
+  const rerun = file ? `\`redline plan ${file}\`` : "`redline plan` on the revised plan";
+  return `YOUR PLAN WAS NOT APPROVED.
 
-You MUST revise the plan to address ALL of the feedback below before calling ExitPlanMode again.
+You MUST revise ${where} to address ALL of the feedback below, then run ${rerun} again for another review. Do not start implementing.
 
 Rules:
 - Do not resubmit the same plan unchanged.
 - Keep the plan's title (first # heading) unless the reviewer asks you to change it.
 - Quoted text identifies the exact passage each note refers to.`;
+}
+
+export const PLAN_APPROVED = "# Plan Approved\n\nThe reviewer approved the plan. Proceed with the implementation.";
+export const PLAN_CLOSED = "Plan review closed without a decision. Do not start implementing: ask the user how they want to proceed.";
 
 export const REVIEW_APPROVED = "# Code Review\n\nCode review completed — no changes requested.";
 
@@ -69,8 +76,24 @@ export function formatPlanFeedback(annotations = []) {
   return parts.join("\n").trimEnd();
 }
 
-export function composePlanDenied(annotations) {
-  return `${PLAN_DENIED_HEADER}\n\n${formatPlanFeedback(annotations)}`;
+export function composePlanDenied(annotations, file) {
+  return `${planDeniedHeader(file)}\n\n${formatPlanFeedback(annotations)}`;
+}
+
+/** The text printed on stdout for a plan decision. */
+export function composePlanMessage(result, file) {
+  const anns = (result.annotations || []).filter((a) => a.type !== "general" || a.text?.trim());
+  if (result.decision === "approved") {
+    if (!anns.length) return { decision: "approved", message: PLAN_APPROVED };
+    return {
+      decision: "approved",
+      message: `# Plan Approved\n\nThe reviewer approved the plan with notes. Proceed with the implementation and follow these notes as you go; you do not need to resubmit the plan.\n\n${formatPlanFeedback(anns).replace(/^# Plan Feedback\n\n/, "")}`,
+    };
+  }
+  if (result.decision === "annotated" && anns.length) {
+    return { decision: "annotated", message: composePlanDenied(anns, file) };
+  }
+  return { decision: "dismissed", message: PLAN_CLOSED };
 }
 
 function lineLabel(a) {
